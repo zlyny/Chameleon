@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 信号强度等级图标：level 0~3 由弱到强，配合 ImageView.setImageLevel() 使用 -->
+<level-list xmlns:android="http://schemas.android.com/apk/res/android">
+    <item
+        android:drawable="@drawable/ic_signal_level_1"
+        android:maxLevel="0" />
+    <item
+        android:drawable="@drawable/ic_signal_level_2"
+        android:maxLevel="1" />
+    <item
+        android:drawable="@drawable/ic_signal_level_3"
+        android:maxLevel="2" />
+    <item
+        android:drawable="@drawable/ic_signal_level_4"
+        android:maxLevel="3" />
+</level-list>
