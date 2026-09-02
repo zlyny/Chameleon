@@ -54,7 +54,7 @@ class ChameleonBleClient(private val centralManager: CentralManager) {
         /** 收到一个完整且校验通过的协议帧 */
         fun onFrameReceived(frame: ChameleonFrame)
 
-        /** 一个协议帧已成功写入设备（供 UI 层记录 TX 日志） */
+        /** 一个协议帧即将写入设备（供 UI 层记录 TX 日志；在写入前回调，确保 TX 日志先于对应 RX 日志） */
         fun onFrameSent(frame: ChameleonFrame) {}
 
         /** 连接断开，[byUser] 为 true 表示本次断开由 [disconnect] 主动发起 */
@@ -188,11 +188,14 @@ class ChameleonBleClient(private val centralManager: CentralManager) {
         check(ready) { "BLE 连接未就绪" }
         val target = peripheral ?: throw ChameleonBleException("连接已断开")
         val rx = rxCharacteristic ?: throw ChameleonBleException("连接已断开")
+        // TX 日志须在写特征之前记录：写完成回调（ATT ACK）与响应 notify
+        // 回调的到达顺序不保证（设备可能先回响应帧再确认写），写完后记录
+        // 会导致 TX/RX 日志顺序颠倒
+        listener?.onFrameSent(frame)
         val maxLength = target.maximumWriteValueLength(WriteType.WITH_RESPONSE)
         frame.encode().chunked(maxLength).forEach { chunk ->
             rx.write(chunk, WriteType.WITH_RESPONSE)
         }
-        listener?.onFrameSent(frame)
     }
 
     /**

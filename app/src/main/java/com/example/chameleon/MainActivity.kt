@@ -21,7 +21,8 @@ import kotlinx.coroutines.launch
  * （扫描连接 / 读卡 / 日志 / 卡片管理），Fragment 以 show/hide 切换，
  * 各页状态在切换与重建后均保留。
  *
- * 顶部工具栏实时展示连接状态与设备工作模式小图标（与 MainViewModel.deviceMode 挂钩）。
+ * 顶部工具栏实时展示连接状态与设备工作模式小图标（与 MainViewModel.deviceMode 挂钩）；
+ * 点击模式图标可在读卡器/模拟卡模式间切换（设备需已连接）。
  */
 class MainActivity : AppCompatActivity() {
 
@@ -43,6 +44,9 @@ class MainActivity : AppCompatActivity() {
             if (item.itemId != currentTabId) switchTab(item.itemId)
             true
         }
+
+        // 点击模式图标切换读卡器/模拟卡模式（切换中与读卡流程中由 ViewModel 拦截）
+        binding.imageModeIcon.setOnClickListener { viewModel.toggleDeviceMode() }
 
         observeViewModel()
     }

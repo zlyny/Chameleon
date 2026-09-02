@@ -50,15 +50,14 @@
     <string name="tag_value_placeholder">--</string>
     <string name="tag_ats_none">No</string>
     <string name="reader_keys_title">Keys</string>
-    <string name="reader_keys_hint">绿勾 = 已恢复；点红叉对该位发起 Nested 攻击</string>
+    <string name="reader_keys_hint">绿勾 = 已恢复；点红叉Nested攻击</string>
     <string name="btn_read">Read</string>
     <string name="btn_reading">正在读卡…</string>
     <string name="btn_recover_keys">Recover keys</string>
     <string name="btn_recovering">正在破解…</string>
     <string name="btn_dump">Dump</string>
     <string name="btn_dumping">正在读取…</string>
-    <string name="dump_saved_at">已保存：%1$s</string>
-    <string name="dump_permission_denied">存储权限被拒绝，无法保存 dump 文件</string>
+    <string name="dump_saved_at">已存入卡片库：%1$s</string>
 
     <!-- 日志页 -->
     <string name="log_title">通信日志</string>
@@ -66,5 +65,19 @@
     <string name="btn_clear_log">清空</string>
 
     <!-- 卡片管理页 -->
-    <string name="cards_placeholder">卡片管理功能开发中\n（卡槽选择 / 加载 dump / 卡型设置）</string>
+    <string name="cards_title">卡片管理</string>
+    <string name="cards_hint">Dump 出的卡片存于本机卡片库，点「写入设备」加载到 Chameleon 模拟卡</string>
+    <string name="cards_empty">卡片库为空\n读卡页 Dump 后的卡片会出现在这里</string>
+    <string name="card_item_subtitle">SAK %1$s · ATQA %2$s · %3$d 块 · %4$s</string>
+    <string name="btn_card_write">写入设备</string>
+    <string name="btn_card_view">查看数据</string>
+    <string name="btn_card_delete">删除</string>
+    <string name="card_delete_confirm_title">删除卡片</string>
+    <string name="card_delete_confirm_msg">确定删除 %1$s？该操作不可恢复。</string>
+    <string name="card_deleted">已删除 %1$s</string>
+    <string name="card_write_start_failed">无法开始写入（未连接 / 设备忙 / 数据异常），详见日志</string>
+    <string name="card_view_title">卡片数据 · UID %1$s</string>
+    <string name="card_view_sector_ok">扇区 %1$d</string>
+    <string name="card_view_sector_locked">扇区 %1$d · 未破解（全 0）</string>
+    <string name="card_view_trailer">扇区 %1$d · trailer</string>
 </resources>

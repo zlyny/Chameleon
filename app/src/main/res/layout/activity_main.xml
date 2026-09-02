@@ -22,13 +22,18 @@
             app:title="@string/app_name"
             app:titleTextColor="?attr/colorOnPrimary">
 
+            <!-- 工作模式图标：点击在读卡器/模拟卡模式间切换 -->
             <ImageView
                 android:id="@+id/imageModeIcon"
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
                 android:layout_gravity="end|center_vertical"
                 android:layout_marginEnd="16dp"
+                android:background="?attr/selectableItemBackgroundBorderless"
+                android:clickable="true"
                 android:contentDescription="@string/mode_reader"
+                android:focusable="true"
+                android:padding="4dp"
                 android:src="@drawable/ic_mode_reader"
                 app:tint="?attr/colorOnPrimary"
                 tools:visibility="visible" />

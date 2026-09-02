@@ -32,6 +32,24 @@ enum class KeyType(val code: Int) {
     B(0x61),
 }
 
+/**
+ * StaticNested 漏洞代次（Static PRNG 卡的进一步细分）。
+ *
+ * 判定方式：向卡发送 Mifare 认证指令 60 00（对齐 CLI `hf 14a raw -s -c -d 6000`），
+ * 卡应答的首个 NT 为固定值——0x01200145 即 GEN1、0x009080A2 即 GEN2
+ * （与 native-lib.cpp 的 kStaticGen1Nt/kStaticGen2Nt 对应）。
+ * GEN2 卡攻击 KeyB 时 PRNG 前进步数与 GEN1 不同，由 NDK 侧自行适配。
+ */
+enum class StaticNestedGen(val nt: Long, val label: String) {
+    GEN1(0x01200145L, "Static GEN1"),
+    GEN2(0x009080A2L, "Static GEN2"),
+    ;
+
+    companion object {
+        fun ofNt(nt: Long): StaticNestedGen? = entries.firstOrNull { it.nt == nt }
+    }
+}
+
 /** 读到的 14A 标签信息（对应命令 HF14A_SCAN + MF1_DETECT_PRNG 的结果） */
 data class TagInfo(
     /** 卡片 UID（4~10 字节，原始字节序） */
@@ -42,18 +60,16 @@ data class TagInfo(
     /** ATS 应答，非 ISO14443-4 卡为空 */
     val ats: ByteArray,
     val prng: PrngType,
+    /** StaticNested 漏洞代次（仅 [prng] 为 Static 时读卡流程会进一步检测） */
+    val staticGen: StaticNestedGen? = null,
 ) {
     /** UID 十六进制大写（用于展示与文件命名），如 1E6FE3A6 */
     val uidHex: String
         get() = uid.joinToString("") { "%02X".format(it) }
 
-    /** ATQA 数值（原始字节按小端解读，如 04 00 -> 0004） */
-    val atqaValue: Int
-        get() = ((atqa[1].toInt() and 0xFF) shl 8) or (atqa[0].toInt() and 0xFF)
-
-    /** ATQA 数值的十六进制展示（与参考 UI 一致，如 00 04） */
+    /** ATQA 十六进制展示（线上字节序，对齐 CLI `hf 14a info`，如 0400） */
     val atqaHex: String
-        get() = "%04X".format(atqaValue).chunked(2).joinToString(" ")
+        get() = atqa.joinToString("") { "%02X".format(it) }
 
     /** SAK 十六进制展示 */
     val sakHex: String
@@ -87,7 +103,7 @@ data class SectorKeys(
     val keyB: KeyState = KeyState.UNKNOWN_STATE,
 )
 
-/** 一组 Nested 采集随机数：明文 NT 与加密 NT */
+/** 一组 Static Nested 采集随机数：明文 NT 与加密 NT */
 data class NtPair(val nt: Long, val ntEnc: Long)
 
 /** Static Nested 采集结果：UID（4 字节）+ 2 组 NT 对 */
@@ -102,3 +118,9 @@ data class StaticNestedAcquire(
             ((uid[2].toLong() and 0xFF) shl 8) or
             (uid[3].toLong() and 0xFF)
 }
+
+/** 一组 Nested 采集随机数（Weak PRNG 卡）：明文 NT、加密 NT 与传输奇偶位 */
+data class NtTriple(val nt: Long, val ntEnc: Long, val par: Int)
+
+/** NT dist 检测结果（Weak PRNG 卡）：UID 数值 + 认证后 PRNG 前进步数 */
+data class NtDist(val uid: Long, val dist: Int)

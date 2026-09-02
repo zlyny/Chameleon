@@ -1,7 +1,5 @@
 package com.example.chameleon.reader
 
-import android.Manifest
-import android.content.pm.PackageManager
 import android.os.Bundle
 import android.view.LayoutInflater
 import android.view.View
@@ -9,7 +7,6 @@ import android.view.ViewGroup
 import android.widget.GridLayout
 import android.widget.ImageView
 import android.widget.TextView
-import androidx.activity.result.contract.ActivityResultContracts
 import androidx.core.content.ContextCompat
 import androidx.core.view.isVisible
 import androidx.fragment.app.Fragment
@@ -21,7 +18,6 @@ import com.example.chameleon.MainViewModel
 import com.example.chameleon.R
 import com.example.chameleon.databinding.FragmentReaderBinding
 import com.example.chameleon.device.ChameleonSession
-import com.example.chameleon.device.DumpExporter
 import com.example.chameleon.device.KeyState
 import com.example.chameleon.device.KeyStatus
 import com.example.chameleon.device.KeyType
@@ -34,9 +30,11 @@ import kotlinx.coroutines.launch
  * 读卡页（本轮核心功能）：
  * 1. 「读卡」——读卡号并检测 PRNG（设备在模拟卡模式时自动切换为读卡器模式）；
  * 2. 「恢复密钥」——字典攻击，命中的扇区密钥位显示为绿色对号；
- * 3. 点击红色叉号——对该密钥位发起 Nested 攻击（Static PRNG 卡即刻执行，
- *    Weak PRNG 卡预留后续版本）；
- * 4. 「Dump」——用已恢复密钥读取全卡数据并保存到公共下载目录（未破解扇区置 0）。
+ * 3. 点击红色叉号——对该密钥位发起 Nested 攻击：Static PRNG 卡走
+ *    StaticNested、Weak PRNG 卡走 Nested（自动适配）；攻击依赖随机数
+ *    碰撞，单次未命中属正常现象，再次点击即可重试；
+ * 4. 「Dump」——用已恢复密钥读取全卡数据存入 dump 卡片库（未破解扇区置 0），
+ *    卡片管理页可查看 / 写入设备 / 删除。
  */
 class ReaderFragment : Fragment() {
 
@@ -47,16 +45,6 @@ class ReaderFragment : Fragment() {
 
     /** 密钥矩阵单元格引用：[0]=KeyA 行、[1]=KeyB 行，下标为扇区号 */
     private val keyCells = arrayOfNulls<ImageView>(2 * ChameleonSession.MF1_SECTOR_COUNT)
-
-    /** Android 9 及以下导出 dump 前申请传统存储权限 */
-    private val writePermissionLauncher =
-        registerForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
-            if (granted) {
-                viewModel.dumpCard()
-            } else {
-                Snackbar.make(binding.root, R.string.dump_permission_denied, Snackbar.LENGTH_SHORT).show()
-            }
-        }
 
     override fun onCreateView(
         inflater: LayoutInflater,
@@ -72,7 +60,7 @@ class ReaderFragment : Fragment() {
 
         binding.btnRead.setOnClickListener { viewModel.readCard() }
         binding.btnRecover.setOnClickListener { viewModel.recoverKeys() }
-        binding.btnDump.setOnClickListener { onDumpClicked() }
+        binding.btnDump.setOnClickListener { viewModel.dumpCard() }
         buildKeyMatrix()
 
         viewLifecycleOwner.lifecycleScope.launch {
@@ -121,7 +109,8 @@ class ReaderFragment : Fragment() {
         binding.textAts.text =
             if (tag.ats.isEmpty()) getString(R.string.tag_ats_none)
             else tag.ats.joinToString(" ") { "%02X".format(it) }
-        binding.textPrng.text = tag.prng.label
+        // Static 卡在读卡时进一步判定漏洞代次，PRNG 栏显示 Static GEN1/GEN2
+        binding.textPrng.text = tag.staticGen?.label ?: tag.prng.label
         binding.textType.text = tag.guessedType
 
         // Static PRNG 是 Static Nested 攻击的前提，额外标注提示
@@ -237,8 +226,8 @@ class ReaderFragment : Fragment() {
 
     /**
      * 点击密钥矩阵单元格。未破解（红色叉号）的位触发 Nested 攻击：
-     * Static PRNG 卡走 Static Nested；Weak PRNG 卡的 nested 攻击由
-     * ViewModel 分派（后续版本提供）。命中后红叉刷新为绿勾。
+     * ViewModel 按卡的 PRNG 类型自动分派 Static/Weak 算法。命中后红叉
+     * 刷新为绿勾；未命中时 Snackbar 提示重试（攻击成功率有限，属正常）。
      */
     private fun onKeyCellClicked(row: Int, sector: Int) {
         val sectorKeys = viewModel.readerState.value.sectors.getOrNull(sector) ?: return
@@ -246,23 +235,6 @@ class ReaderFragment : Fragment() {
         if (keyState.status != KeyStatus.MISSING) return
 
         viewModel.recoverKeyByNested(sector, if (row == KEY_ROW_A) KeyType.A else KeyType.B)
-    }
-
-    // ------------------------------------------------------------------
-    // Dump
-    // ------------------------------------------------------------------
-
-    private fun onDumpClicked() {
-        if (DumpExporter.requiresLegacyPermission() &&
-            ContextCompat.checkSelfPermission(
-                requireContext(),
-                Manifest.permission.WRITE_EXTERNAL_STORAGE,
-            ) != PackageManager.PERMISSION_GRANTED
-        ) {
-            writePermissionLauncher.launch(Manifest.permission.WRITE_EXTERNAL_STORAGE)
-        } else {
-            viewModel.dumpCard()
-        }
     }
 
     private companion object {

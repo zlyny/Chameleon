@@ -63,12 +63,34 @@ object ChameleonCommand {
     const val MF1_WRITE_ONE_BLOCK = 2009
 
     /**
+     * 14A 原始指令收发（对齐 CLI `hf 14a raw`）。请求 DATA：
+     * options[1] + respTimeoutMs[2] + bitlen[2] + data[N]（均大端）。
+     * options 为 MSB 优先位域：bit7=激活场 bit6=等待响应 bit5=发送附 CRC
+     * bit4=自动选卡 bit3=保持场 bit2=校验响应 CRC；响应 DATA 为卡应答。
+     */
+    const val HF14A_RAW = 2010
+
+    /**
      * Mifare Classic 字典攻击：对掩码选中的扇区密钥位逐一尝试密钥列表。
      * 请求 DATA：mask[10] + keys[N*6]；响应 DATA（490 字节）：found[10] + keys[40][2][6]。
      * mask 为跳过掩码：位=1 跳过、位=0 检查；扇区 s 的 KeyA=byte[s/4] 的
      * bit(7-2*(s%4))，KeyB 为其低位。
      */
     const val MF1_CHECK_KEYS_OF_SECTORS = 2012
+
+    /**
+     * 写入模拟卡块数据（对齐 CLI `hf mf eload`）。请求 DATA：
+     * blockStart[1] + data[N*16]（N 块连续写入，从 blockStart 起自增）；
+     * 单帧 data 上限 512 字节，即一次最多 31 块。status=SUCCESS。
+     */
+    const val MF1_WRITE_EMU_BLOCK_DATA = 4000
+
+    /**
+     * 设置当前 HF 卡槽的反碰撞数据（对齐 CLI `hf 14a anti_coll_data`）。
+     * 请求 DATA：uidLen[1] + uid[N] + atqa[2] + sak[1] + atsLen[1] + ats[N]；
+     * status=SUCCESS。写入 dump 后用于让模拟卡的 UID/ATQA/SAK 与原卡一致。
+     */
+    const val HF14A_SET_ANTI_COLL_DATA = 4001
 
     /** 命令码转可读名称，用于日志展示 */
     fun nameOf(cmd: Int): String = when (cmd) {
@@ -88,7 +110,10 @@ object ChameleonCommand {
         MF1_AUTH_ONE_KEY_BLOCK -> "MF1_AUTH_ONE_KEY_BLOCK"
         MF1_READ_ONE_BLOCK -> "MF1_READ_ONE_BLOCK"
         MF1_WRITE_ONE_BLOCK -> "MF1_WRITE_ONE_BLOCK"
+        HF14A_RAW -> "HF14A_RAW"
         MF1_CHECK_KEYS_OF_SECTORS -> "MF1_CHECK_KEYS_OF_SECTORS"
+        MF1_WRITE_EMU_BLOCK_DATA -> "MF1_WRITE_EMU_BLOCK_DATA"
+        HF14A_SET_ANTI_COLL_DATA -> "HF14A_SET_ANTI_COLL_DATA"
         else -> "CMD_%d".format(cmd)
     }
 }
