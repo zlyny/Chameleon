@@ -36,9 +36,9 @@
         android:supportsRtl="true"
         android:theme="@style/Theme.Chameleon">
 
-        <!-- 开屏扫描页，应用入口 -->
+        <!-- 主界面：底部导航承载扫描连接 / 读卡 / 日志 / 卡片管理四个页面 -->
         <activity
-            android:name=".scan.ScanActivity"
+            android:name=".MainActivity"
             android:exported="true">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
@@ -46,10 +46,6 @@
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
-
-        <activity
-            android:name=".MainActivity"
-            android:exported="false" />
     </application>
 
 </manifest>

@@ -1,6 +1,16 @@
 <resources>
     <string name="app_name">Chameleon</string>
 
+    <!-- 底部导航 -->
+    <string name="tab_scan">扫描</string>
+    <string name="tab_reader">读卡</string>
+    <string name="tab_log">日志</string>
+    <string name="tab_cards">卡片</string>
+
+    <!-- 设备工作模式（工具栏图标说明） -->
+    <string name="mode_reader">读卡器模式</string>
+    <string name="mode_emulator">模拟卡模式</string>
+
     <!-- 扫描页 -->
     <string name="scan_title">扫描设备</string>
     <string name="state_scan_ready">准备扫描附近 BLE 设备…</string>
@@ -14,8 +24,6 @@
     <string name="rssi_level_desc">信号强度</string>
 
     <!-- 设备状态卡片 -->
-    <string name="device_not_connected">未连接设备</string>
-    <string name="device_address_placeholder">--:--:--:--:--:--</string>
     <string name="state_disconnected">未连接</string>
     <string name="state_connecting">连接中…</string>
     <string name="state_connected">已连接</string>
@@ -31,8 +39,32 @@
     <string name="permission_denied">蓝牙权限被拒绝，无法使用 BLE 功能</string>
     <string name="bluetooth_disabled">蓝牙未开启，请在系统设置中开启后重试</string>
 
-    <!-- 日志区 -->
+    <!-- 读卡页 -->
+    <string name="reader_tag_info_title">HF Tag Info</string>
+    <string name="label_uid">UID</string>
+    <string name="label_sak">SAK</string>
+    <string name="label_atqa">ATQA</string>
+    <string name="label_ats">ATS</string>
+    <string name="label_prng">PRNG type</string>
+    <string name="label_type">Guessed type</string>
+    <string name="tag_value_placeholder">--</string>
+    <string name="tag_ats_none">No</string>
+    <string name="reader_keys_title">Keys</string>
+    <string name="reader_keys_hint">绿勾 = 已恢复；点红叉对该位发起 Nested 攻击</string>
+    <string name="btn_read">Read</string>
+    <string name="btn_reading">正在读卡…</string>
+    <string name="btn_recover_keys">Recover keys</string>
+    <string name="btn_recovering">正在破解…</string>
+    <string name="btn_dump">Dump</string>
+    <string name="btn_dumping">正在读取…</string>
+    <string name="dump_saved_at">已保存：%1$s</string>
+    <string name="dump_permission_denied">存储权限被拒绝，无法保存 dump 文件</string>
+
+    <!-- 日志页 -->
     <string name="log_title">通信日志</string>
-    <string name="log_empty">日志为空。连接设备后点击「获取电池信息」测试通信。</string>
-    <string name="native_lib_version_format">原生库版本：%1$s</string>
+    <string name="log_empty">日志为空。连接设备后操作读卡功能即可看到协议交互。</string>
+    <string name="btn_clear_log">清空</string>
+
+    <!-- 卡片管理页 -->
+    <string name="cards_placeholder">卡片管理功能开发中\n（卡槽选择 / 加载 dump / 卡型设置）</string>
 </resources>

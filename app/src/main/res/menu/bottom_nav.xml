@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 底部导航：四个页面（扫描连接 / 读卡 / 日志 / 卡片管理），与 MainActivity.TABS 对应 -->
+<menu xmlns:android="http://schemas.android.com/apk/res/android">
+    <item
+        android:id="@+id/tab_scan"
+        android:icon="@drawable/ic_tab_scan"
+        android:title="@string/tab_scan" />
+    <item
+        android:id="@+id/tab_reader"
+        android:icon="@drawable/ic_tab_reader"
+        android:title="@string/tab_reader" />
+    <item
+        android:id="@+id/tab_log"
+        android:icon="@drawable/ic_tab_log"
+        android:title="@string/tab_log" />
+    <item
+        android:id="@+id/tab_cards"
+        android:icon="@drawable/ic_tab_cards"
+        android:title="@string/tab_cards" />
+</menu>

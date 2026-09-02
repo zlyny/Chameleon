@@ -10,6 +10,7 @@ import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.flow.catch
 import kotlinx.coroutines.flow.filterIsInstance
@@ -17,6 +18,9 @@ import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.launchIn
 import kotlinx.coroutines.flow.onEach
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.withTimeout
 import no.nordicsemi.kotlin.ble.client.RemoteCharacteristic
 import no.nordicsemi.kotlin.ble.client.RemoteServices
 import no.nordicsemi.kotlin.ble.client.android.CentralManager
@@ -50,6 +54,9 @@ class ChameleonBleClient(private val centralManager: CentralManager) {
         /** 收到一个完整且校验通过的协议帧 */
         fun onFrameReceived(frame: ChameleonFrame)
 
+        /** 一个协议帧已成功写入设备（供 UI 层记录 TX 日志） */
+        fun onFrameSent(frame: ChameleonFrame) {}
+
         /** 连接断开，[byUser] 为 true 表示本次断开由 [disconnect] 主动发起 */
         fun onDisconnected(byUser: Boolean)
 
@@ -68,6 +75,10 @@ class ChameleonBleClient(private val centralManager: CentralManager) {
     private var peripheral: Peripheral? = null
     private var rxCharacteristic: RemoteCharacteristic? = null
     private var scope: CoroutineScope? = null
+
+    /** 当前等待中的请求-响应匹配（同一时刻只允许一个在途请求，由 [requestMutex] 保证） */
+    private val requestMutex = Mutex()
+    private var pendingResponse: CompletableDeferred<ChameleonFrame>? = null
 
     /** 链路已就绪（connect() 成功返回后置位） */
     private var ready = false
@@ -145,7 +156,10 @@ class ChameleonBleClient(private val centralManager: CentralManager) {
         val subscribed = CompletableDeferred<Unit>()
         tx.subscribe { subscribed.complete(Unit) }
             .onEach { data ->
-                frameDecoder.feed(data).forEach { listener?.onFrameReceived(it) }
+                frameDecoder.feed(data).forEach { frame ->
+                    pendingResponse?.complete(frame)
+                    listener?.onFrameReceived(frame)
+                }
             }
             .catch { e -> listener?.onError("通知接收异常：${e.message}") }
             .launchIn(connectionScope)
@@ -177,6 +191,35 @@ class ChameleonBleClient(private val centralManager: CentralManager) {
         val maxLength = target.maximumWriteValueLength(WriteType.WITH_RESPONSE)
         frame.encode().chunked(maxLength).forEach { chunk ->
             rx.write(chunk, WriteType.WITH_RESPONSE)
+        }
+        listener?.onFrameSent(frame)
+    }
+
+    /**
+     * 发送一个协议帧并挂起等待设备返回的下一帧响应（不校验 cmd 匹配，
+     * 协议为严格的请求-响应串行模型，配合 [requestMutex] 保证时序）。
+     *
+     * 响应帧同时仍会经 [Listener.onFrameReceived] 回调（供日志等使用）。
+     *
+     * @param timeoutMs 等待响应的超时时间
+     * @throws ChameleonBleException 发送失败、超时或等待期间连接断开
+     */
+    suspend fun request(frame: ChameleonFrame, timeoutMs: Long = DEFAULT_REQUEST_TIMEOUT_MS): ChameleonFrame {
+        requestMutex.withLock {
+            val deferred = CompletableDeferred<ChameleonFrame>()
+            pendingResponse = deferred
+            try {
+                send(frame)
+                try {
+                    return withTimeout(timeoutMs) { deferred.await() }
+                } catch (e: TimeoutCancellationException) {
+                    throw ChameleonBleException(
+                        "设备响应超时（%d ms），cmd=%s".format(timeoutMs, frame.cmd),
+                    )
+                }
+            } finally {
+                pendingResponse = null
+            }
         }
     }
 
@@ -216,6 +259,8 @@ class ChameleonBleClient(private val centralManager: CentralManager) {
     private fun notifyDisconnected(byUser: Boolean) {
         if (disconnectNotified) return
         disconnectNotified = true
+        pendingResponse?.completeExceptionally(ChameleonBleException("连接已断开"))
+        pendingResponse = null
         listener?.onDisconnected(byUser)
     }
 
@@ -226,5 +271,10 @@ class ChameleonBleClient(private val centralManager: CentralManager) {
         peripheral = null
         rxCharacteristic = null
         ready = false
+    }
+
+    private companion object {
+        /** 常规命令默认超时；慢命令（如字典攻击）由调用方显式传入更长超时 */
+        const val DEFAULT_REQUEST_TIMEOUT_MS = 5_000L
     }
 }
