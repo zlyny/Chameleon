@@ -39,14 +39,14 @@ import kotlinx.coroutines.launch
 class ReaderFragment : Fragment() {
 
     private var _binding: FragmentReaderBinding? = null
-    private val binding get() = requireNotNull(_binding)
+    private val binding get() = requireNotNull(_binding)    //每次访问会检查,null抛异常
 
     private val viewModel: MainViewModel by activityViewModels()
 
     /** 密钥矩阵单元格引用：[0]=KeyA 行、[1]=KeyB 行，下标为扇区号 */
     private val keyCells = arrayOfNulls<ImageView>(2 * ChameleonSession.MF1_SECTOR_COUNT)
 
-    override fun onCreateView(
+    override fun onCreateView(  //造出视图
         inflater: LayoutInflater,
         container: ViewGroup?,
         savedInstanceState: Bundle?,
@@ -55,7 +55,7 @@ class ReaderFragment : Fragment() {
         return binding.root
     }
 
-    override fun onViewCreated(view: View, savedInstanceState: Bundle?) {
+    override fun onViewCreated(view: View, savedInstanceState: Bundle?) {   //UI初始化
         super.onViewCreated(view, savedInstanceState)
 
         binding.btnRead.setOnClickListener { viewModel.readCard() }
@@ -88,7 +88,7 @@ class ReaderFragment : Fragment() {
 
         state.lastError?.let { message ->
             Snackbar.make(binding.root, message, Snackbar.LENGTH_LONG).show()
-            viewModel.consumeLastError()
+            viewModel.consumeLastError()    //用状态模拟事件,处理完需要清除(否则旋转或再次订阅会重新触发),但代价是会再次渲染一次,可以使用SharedFlow 或 Channel代替
         }
     }
 
@@ -100,7 +100,6 @@ class ReaderFragment : Fragment() {
             binding.textAtqa.text = getString(R.string.tag_value_placeholder)
             binding.textAts.text = getString(R.string.tag_value_placeholder)
             binding.textPrng.text = getString(R.string.tag_value_placeholder)
-            binding.textType.text = getString(R.string.tag_value_placeholder)
             return
         }
         binding.textUid.text = tag.uidHex.chunked(2).joinToString(" ")
@@ -111,15 +110,14 @@ class ReaderFragment : Fragment() {
             else tag.ats.joinToString(" ") { "%02X".format(it) }
         // Static 卡在读卡时进一步判定漏洞代次，PRNG 栏显示 Static GEN1/GEN2
         binding.textPrng.text = tag.staticGen?.label ?: tag.prng.label
-        binding.textType.text = tag.guessedType
 
         // Static PRNG 是 Static Nested 攻击的前提，额外标注提示
-        binding.textPrng.setTextColor(
-            ContextCompat.getColor(
-                requireContext(),
-                if (tag.prng == PrngType.STATIC) R.color.key_found else R.color.log_info,
-            ),
-        )
+//        binding.textPrng.setTextColor(
+//            ContextCompat.getColor(
+//                requireContext(),
+//                if (tag.prng == PrngType.STATIC) R.color.key_found else R.color.log_info,
+//            ),
+//        )
     }
 
     private fun renderKeyMatrix(sectors: List<SectorKeys>) {
@@ -182,12 +180,12 @@ class ReaderFragment : Fragment() {
 
     /** 一组矩阵：列号行 + KeyA 行 + KeyB 行 */
     private fun buildKeyMatrixGroup(grid: GridLayout, sectors: IntRange, cellPx: Int) {
-        grid.columnCount = sectors.count() + 1
-        grid.addView(makeLabel("", cellPx))
-        sectors.forEach { s -> grid.addView(makeLabel(s.toString(), cellPx)) }
+        grid.columnCount = sectors.count() + 1      //每行数量
+        grid.addView(makeLabel("", cellPx))     //第一个位置空
+        sectors.forEach { s -> grid.addView(makeLabel(s.toString(), cellPx)) }  //标题栏
         listOf("A", "B").forEachIndexed { row, label ->
             grid.addView(makeLabel(label, cellPx))
-            sectors.forEach { s -> grid.addView(makeKeyCell(row, s, cellPx)) }
+            sectors.forEach { s -> grid.addView(makeKeyCell(row, s, cellPx)) }  //画图标
         }
     }
 
@@ -232,7 +230,7 @@ class ReaderFragment : Fragment() {
     private fun onKeyCellClicked(row: Int, sector: Int) {
         val sectorKeys = viewModel.readerState.value.sectors.getOrNull(sector) ?: return
         val keyState = if (row == KEY_ROW_A) sectorKeys.keyA else sectorKeys.keyB
-        if (keyState.status != KeyStatus.MISSING) return
+        if (keyState.status != KeyStatus.MISSING) return    //只有红叉可点
 
         viewModel.recoverKeyByNested(sector, if (row == KEY_ROW_A) KeyType.A else KeyType.B)
     }
@@ -242,6 +240,6 @@ class ReaderFragment : Fragment() {
         const val KEY_ROW_B = 1
 
         /** 矩阵单元格边长：9 列 × 28dp = 252dp，小屏（320dp）也可容纳 */
-        const val CELL_SIZE_DP = 28
+        const val CELL_SIZE_DP = 36
     }
 }

@@ -68,9 +68,9 @@ class ChameleonBleClient(private val centralManager: CentralManager) {
 
     /** 当前协商生效的 ATT MTU */
     var mtu: Int = 0
-        private set
+        private set     //对外只读
 
-    private val frameDecoder = FrameDecoder()
+    private val frameDecoder = FrameDecoder()       //帧重组
 
     private var peripheral: Peripheral? = null
     private var rxCharacteristic: RemoteCharacteristic? = null
@@ -96,14 +96,14 @@ class ChameleonBleClient(private val centralManager: CentralManager) {
      * @throws ChameleonBleException 连接失败、超时或设备不支持 NUS
      */
     suspend fun connect(address: String) {
-        check(peripheral == null) { "客户端未处于断开状态" }
+        check(peripheral == null) { "客户端未处于断开状态" }  //断言
         closeRequested = false
         disconnectNotified = false
 
         val target = centralManager.getPeripheralById(address)
             ?: throw ChameleonBleException("设备不在管理器缓存中，请返回重新扫描")
 
-        val connectionScope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
+        val connectionScope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)  //造一个私有协程作用域,回调在主线程执行
         peripheral = target
         scope = connectionScope
 
@@ -118,7 +118,7 @@ class ChameleonBleClient(private val centralManager: CentralManager) {
             )
         } catch (e: CancellationException) {
             release()
-            throw e
+            throw e     //协程的CancellationException异常需要原样抛出
         } catch (e: Exception) {
             release()
             throw ChameleonBleException(e.message ?: "连接失败")
@@ -153,16 +153,16 @@ class ChameleonBleClient(private val centralManager: CentralManager) {
 
         // 订阅 TX notify；onSubscription 在 CCCD 写入完成后回调，
         // await 它保证不漏掉连接建立后立即到来的通知
-        val subscribed = CompletableDeferred<Unit>()
-        tx.subscribe { subscribed.complete(Unit) }
-            .onEach { data ->
+        val subscribed = CompletableDeferred<Unit>()        //完成信号灯
+        tx.subscribe { subscribed.complete(Unit) }  //订阅真正生效后执行
+            .onEach { data ->                               //每次接收到都会执行??
                 frameDecoder.feed(data).forEach { frame ->
-                    pendingResponse?.complete(frame)
-                    listener?.onFrameReceived(frame)
+                    pendingResponse?.complete(frame)    //唤醒
+                    listener?.onFrameReceived(frame)            //接收日志
                 }
             }
             .catch { e -> listener?.onError("通知接收异常：${e.message}") }
-            .launchIn(connectionScope)
+            .launchIn(connectionScope)  //开始在协程中执行
         try {
             subscribed.await()
         } catch (e: CancellationException) {
@@ -193,7 +193,7 @@ class ChameleonBleClient(private val centralManager: CentralManager) {
         // 会导致 TX/RX 日志顺序颠倒
         listener?.onFrameSent(frame)
         val maxLength = target.maximumWriteValueLength(WriteType.WITH_RESPONSE)
-        frame.encode().chunked(maxLength).forEach { chunk ->
+        frame.encode().chunked(maxLength).forEach { chunk ->    //按mtu分包写
             rx.write(chunk, WriteType.WITH_RESPONSE)
         }
     }
@@ -208,9 +208,9 @@ class ChameleonBleClient(private val centralManager: CentralManager) {
      * @throws ChameleonBleException 发送失败、超时或等待期间连接断开
      */
     suspend fun request(frame: ChameleonFrame, timeoutMs: Long = DEFAULT_REQUEST_TIMEOUT_MS): ChameleonFrame {
-        requestMutex.withLock {
+        requestMutex.withLock {             //加锁保证一发一收严格对应
             val deferred = CompletableDeferred<ChameleonFrame>()
-            pendingResponse = deferred
+            pendingResponse = deferred          //接收邮箱
             try {
                 send(frame)
                 try {
@@ -221,7 +221,7 @@ class ChameleonBleClient(private val centralManager: CentralManager) {
                     )
                 }
             } finally {
-                pendingResponse = null
+                pendingResponse = null      //每次通信建立新邮箱,防止上一个消息延时到达新的请求上
             }
         }
     }

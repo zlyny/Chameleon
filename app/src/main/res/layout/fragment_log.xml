@@ -44,7 +44,7 @@
             android:layout_height="wrap_content"
             android:fontFamily="monospace"
             android:text="@string/log_empty"
-            android:textAppearance="?attr/textAppearanceBodyMedium"
+            android:textAppearance="?attr/textAppearanceBodySmall"
             android:textIsSelectable="true"
             tools:text="11 EF 03 EA 00 00 00 00 13 00 [GET_DEVICE_MODE status=0x0000]" />
     </ScrollView>

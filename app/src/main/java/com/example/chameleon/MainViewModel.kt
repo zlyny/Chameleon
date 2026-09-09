@@ -43,12 +43,12 @@ import kotlinx.coroutines.withContext
 class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     /** 连接状态 */
-    sealed interface ConnectionState {
-        data object Disconnected : ConnectionState
+    sealed interface ConnectionState {  //sealed(封闭)的核心价值,让编译器知道这个接口总共只有 3 个子类型
+        data object Disconnected : ConnectionState  //全局只有一个实例的常量状态,所以用单例
 
         data object Connecting : ConnectionState
 
-        data class Connected(val name: String, val address: String) : ConnectionState
+        data class Connected(val name: String, val address: String) : ConnectionState   //数据类,可以设置默认值
     }
 
     /** 日志类型，决定 UI 中的显示颜色 */
@@ -71,7 +71,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     /** 读卡页聚合状态 */
-    data class ReaderState(
+    data class ReaderState( //将读卡数据打包,界面只 collect 一条流,防止数据不一致
         val phase: ReaderPhase = ReaderPhase.Idle,
         val tagInfo: TagInfo? = null,
         /** 每扇区 A/B 密钥恢复结果；非 Mifare 卡或未读卡时为空 */
@@ -86,8 +86,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     val connectionState: StateFlow<ConnectionState> = _connectionState.asStateFlow()
 
     /** 设备工作模式（连接就绪后读取一次并缓存，主界面图标与其挂钩） */
-    private val _deviceMode = MutableStateFlow(DeviceMode.UNKNOWN)
-    val deviceMode: StateFlow<DeviceMode> = _deviceMode.asStateFlow()
+    private val _deviceMode = MutableStateFlow(DeviceMode.UNKNOWN)  //下划线开头是私有的可写版，只有 ViewModel 内部能改
+    val deviceMode: StateFlow<DeviceMode> = _deviceMode.asStateFlow()       //公开版本只读
 
     private val _log = MutableStateFlow<List<LogEntry>>(emptyList())
     val log: StateFlow<List<LogEntry>> = _log.asStateFlow()
@@ -95,9 +95,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private val _readerState = MutableStateFlow(ReaderState())
     val readerState: StateFlow<ReaderState> = _readerState.asStateFlow()
 
-    private var client: ChameleonBleClient? = null
-    private var session: ChameleonSession? = null
-    private var nextLogId = 0L
+    private var client: ChameleonBleClient? = null  //ble层
+    private var session: ChameleonSession? = null   //会话层
+    private var nextLogId = 0L      //日志序号自增
 
     /** dump 卡片库（app 专属目录，卡片管理页与 dump 流程共用） */
     private val dumpRepository = DumpRepository(application)
@@ -114,15 +114,15 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
      * 连接就绪后自动创建命令会话并读取设备工作模式。
      */
     fun connectDevice(address: String, name: String?) {
-        if (client != null) return
+        if (client != null) return  //防重入保护
         val displayName = name ?: address
 
         val newClient = ChameleonBleClient(BleCenter.centralManager)
-        newClient.listener = object : ChameleonBleClient.Listener {
+        newClient.listener = object : ChameleonBleClient.Listener { // 匿名对象实现监听器
             override fun onReady(mtu: Int) {
                 appendLog(LogKind.INFO, "连接就绪（MTU=$mtu）")
                 session = ChameleonSession(newClient)
-                _connectionState.value = ConnectionState.Connected(displayName, address)
+                _connectionState.value = ConnectionState.Connected(displayName, address)    //将蓝牙回调转换成状态流
                 refreshDeviceMode()
             }
 
@@ -147,7 +147,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 appendLog(LogKind.ERROR, message)
             }
         }
-        client = newClient
+        client = newClient  //配合函数入口的防冲入保护使用
         _connectionState.value = ConnectionState.Connecting
         appendLog(LogKind.INFO, "正在连接 $displayName（$address）…")
         viewModelScope.launch {
@@ -168,7 +168,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     /** 查询电池信息（设备级命令，结果写入日志） */
     fun requestBatteryInfo() {
-        val s = session ?: return
+        val s = session ?: return   //取到局部变量中,防止协程运行时 断开连接session失效
         viewModelScope.launch {
             try {
                 val (voltageMv, percent) = s.getBatteryInfo()
@@ -190,11 +190,11 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
      */
     fun readCard() {
         val s = session ?: run {
-            _readerState.update { it.copy(lastError = "设备未连接") }
+            _readerState.update { it.copy(lastError = "设备未连接") }    // it.copy是复制一个新的it,并部分赋值
             return
         }
         if (_readerState.value.phase != ReaderPhase.Idle) return
-        _readerState.update { it.copy(phase = ReaderPhase.Reading, lastError = null) }
+        _readerState.update { it.copy(phase = ReaderPhase.Reading, lastError = null) }  //进入 Reading 阶段
         viewModelScope.launch {
             try {
                 ensureReaderMode(s)
@@ -208,7 +208,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                         )
                     }
                     appendLog(LogKind.INFO, "读到标签 UID=${tag.uidHex}，但不支持 Mifare Classic")
-                    return@launch
+                    return@launch   //从协程中退出
                 }
                 val prng = try {
                     s.detectPrng()
@@ -476,7 +476,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         blockTarget: Int,
         keyType: KeyType,
     ): LongArray {
-        appendLog(LogKind.INFO, "- NT vulnerable: StaticNested")
+        appendLog(LogKind.INFO, "- 已知块=%d(%d),NT vulnerable: StaticNested".format(blockKnown,known.second.code))
 
         val acquired = s.staticNestedAcquire(
             blockKnown = blockKnown,
@@ -515,7 +515,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         blockTarget: Int,
         keyType: KeyType,
     ): LongArray {
-        appendLog(LogKind.INFO, "- NT vulnerable: Nested")
+        appendLog(LogKind.INFO, "known=%d(%d)- NT vulnerable: Nested".format(blockKnown,known.second.code))
 
         val ntDist = s.detectNtDist(blockKnown, known.second, known.third)
         val triples = s.nestedAcquire(blockKnown, known.second, known.third, blockTarget, keyType)
@@ -537,7 +537,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     /** 计时执行 NDK 求解（计算密集，调度到默认线程池），输出 CLI 同款耗时日志 */
     private suspend fun solveWithTiming(solve: suspend () -> LongArray): LongArray {
         val startedAt = SystemClock.elapsedRealtime()
-        val candidates = withContext(Dispatchers.Default) { solve() }
+        val candidates = withContext(Dispatchers.Default) { solve() }   //Dispatchers.Default是按 CPU 核数开的计算线程池,挂起当前协程,直到solve()执行完毕
         appendLog(
             LogKind.INFO,
             "  [ Time elapsed %.1fs ]".format((SystemClock.elapsedRealtime() - startedAt) / 1000f),

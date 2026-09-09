@@ -9,48 +9,44 @@
     tools:context=".MainActivity">
 
     <!-- 顶部工具栏：应用标题 + 连接状态副标题 + 设备工作模式图标 -->
-    <com.google.android.material.appbar.AppBarLayout
+    <com.google.android.material.appbar.MaterialToolbar
+        android:id="@+id/toolbar"
         android:layout_width="match_parent"
-        android:layout_height="wrap_content">
+        android:layout_height="?attr/actionBarSize"
+        android:background="?attr/colorPrimary"
+        app:navigationIcon="@null"
+        app:subtitle="@string/state_disconnected"
+        app:title="@string/app_name"
+        app:titleTextColor="?attr/colorOnPrimary">
 
-        <com.google.android.material.appbar.MaterialToolbar
-            android:id="@+id/toolbar"
-            android:layout_width="match_parent"
-            android:layout_height="?attr/actionBarSize"
-            android:background="?attr/colorPrimary"
-            app:navigationIcon="@null"
-            app:title="@string/app_name"
-            app:titleTextColor="?attr/colorOnPrimary">
+        <!-- 工作模式图标：点击在读卡器/模拟卡模式间切换 -->
+        <com.google.android.material.button.MaterialButton
+            android:id="@+id/btnModeSwitch"
+            style="@style/Widget.Material3.Button.IconButton"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_gravity="end|center_vertical"
+            android:layout_marginEnd="16dp"
+            android:contentDescription="@string/mode_reader"
+            app:iconSize="32dp"
+            app:icon="@drawable/ic_mode_reader"
+            app:iconTint="?attr/colorOnPrimary" />
+    </com.google.android.material.appbar.MaterialToolbar>
 
-            <!-- 工作模式图标：点击在读卡器/模拟卡模式间切换 -->
-            <ImageView
-                android:id="@+id/imageModeIcon"
-                android:layout_width="wrap_content"
-                android:layout_height="wrap_content"
-                android:layout_gravity="end|center_vertical"
-                android:layout_marginEnd="16dp"
-                android:background="?attr/selectableItemBackgroundBorderless"
-                android:clickable="true"
-                android:contentDescription="@string/mode_reader"
-                android:focusable="true"
-                android:padding="4dp"
-                android:src="@drawable/ic_mode_reader"
-                app:tint="?attr/colorOnPrimary"
-                tools:visibility="visible" />
-        </com.google.android.material.appbar.MaterialToolbar>
-    </com.google.android.material.appbar.AppBarLayout>
 
     <!-- 页面容器：四个 Fragment 以 show/hide 切换 -->
-    <FrameLayout
+    <androidx.fragment.app.FragmentContainerView
         android:id="@+id/fragmentContainer"
         android:layout_width="match_parent"
         android:layout_height="0dp"
-        android:layout_weight="1" />
+        android:layout_weight="1"
+        tools:layout="@layout/fragment_reader" />
 
     <com.google.android.material.bottomnavigation.BottomNavigationView
         android:id="@+id/bottomNav"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
+        app:labelVisibilityMode="labeled"
         app:menu="@menu/bottom_nav" />
 
 </LinearLayout>

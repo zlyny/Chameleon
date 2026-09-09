@@ -6,6 +6,7 @@ import androidx.lifecycle.viewModelScope
 import com.example.chameleon.R
 import com.example.chameleon.ble.BleCenter
 import com.example.chameleon.ble.BleConstants
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -31,7 +32,7 @@ data class DiscoveredDevice(
  */
 class ScanViewModel(application: Application) : AndroidViewModel(application) {
 
-    sealed interface ScanState {
+    sealed interface ScanState {    //定义4个状态
         data object Idle : ScanState
 
         data class Scanning(val devices: List<DiscoveredDevice>) : ScanState
@@ -45,21 +46,21 @@ class ScanViewModel(application: Application) : AndroidViewModel(application) {
     private val _scanState = MutableStateFlow<ScanState>(ScanState.Idle)
     val scanState: StateFlow<ScanState> = _scanState.asStateFlow()
 
-    private var scanJob: Job? = null
+    private var scanJob: Job? = null    //用于中途叫停协程
 
     /** 开始扫描；重复调用会替代进行中的扫描 */
     fun startScan() {
-        if (_scanState.value is ScanState.Scanning) return
-        scanJob?.cancel()
-        _scanState.value = ScanState.Scanning(emptyList())
+        if (_scanState.value is ScanState.Scanning) return  //已在扫,忽略
+        scanJob?.cancel()                                   //有旧任务,取消
+        _scanState.value = ScanState.Scanning(emptyList())  //进入扫描态,清空列表
         scanJob = viewModelScope.launch {
             try {
                 BleCenter.centralManager
-                    .scan(timeout = BleConstants.SCAN_DURATION)
-                    .distinctByPeripheral()
-                    .collect { result ->
+                    .scan(timeout = BleConstants.SCAN_DURATION) //蓝牙库的扫描 Flow,自带超时
+                    .distinctByPeripheral()             //按设备去重,只留首次
+                    .collect { result ->                //每发现一台设备回调一次
                         _scanState.update { state ->
-                            if (state is ScanState.Scanning) {
+                            if (state is ScanState.Scanning) {  //状态守卫,cancel是异步生效的,防止已经Finished但又被设为Scanning
                                 ScanState.Scanning(
                                     (state.devices + result.toDiscoveredDevice()).sorted(),
                                 )
@@ -68,11 +69,12 @@ class ScanViewModel(application: Application) : AndroidViewModel(application) {
                             }
                         }
                     }
-                _scanState.update { state ->
+                _scanState.update { state ->        //.update(oldState -> newState),可以触发collect,线程安全,适合根据oldState做计算的场景
                     ScanState.Finished((state as? ScanState.Scanning)?.devices ?: emptyList())
                 }
             } catch (e: Exception) {
-                _scanState.value = ScanState.Failed(scanErrorMessage(e))
+                if (e is CancellationException) throw e     //scanJob.cancel后会跳到这里(异步),
+                _scanState.value = ScanState.Failed(scanErrorMessage(e))    //.value可以触发collect,但非线程安全
             }
         }
     }
@@ -86,7 +88,7 @@ class ScanViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     override fun onCleared() {
-        scanJob?.cancel()
+        scanJob?.cancel()   //临终清理
         super.onCleared()
     }
 

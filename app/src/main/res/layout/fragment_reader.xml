@@ -27,7 +27,7 @@
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
                     android:text="@string/reader_tag_info_title"
-                    android:textAppearance="?attr/textAppearanceTitleLarge" />
+                    android:textAppearance="?attr/textAppearanceBodyLarge" />
 
                 <!-- 每行：字段名 + 数值（等宽字体便于阅读十六进制） -->
                 <LinearLayout
@@ -41,7 +41,7 @@
                         android:layout_height="wrap_content"
                         android:layout_weight="1"
                         android:text="@string/label_uid"
-                        android:textAppearance="?attr/textAppearanceBodyLarge" />
+                        android:textAppearance="?attr/textAppearanceBodyMedium" />
 
                     <TextView
                         android:id="@+id/textUid"
@@ -49,7 +49,7 @@
                         android:layout_height="wrap_content"
                         android:fontFamily="monospace"
                         android:text="@string/tag_value_placeholder"
-                        android:textAppearance="?attr/textAppearanceBodyLarge"
+                        android:textAppearance="?attr/textAppearanceBodyMedium"
                         android:textStyle="bold"
                         tools:text="C6 7C 27 96" />
                 </LinearLayout>
@@ -65,7 +65,7 @@
                         android:layout_height="wrap_content"
                         android:layout_weight="1"
                         android:text="@string/label_sak"
-                        android:textAppearance="?attr/textAppearanceBodyLarge" />
+                        android:textAppearance="?attr/textAppearanceBodyMedium" />
 
                     <TextView
                         android:id="@+id/textSak"
@@ -73,7 +73,7 @@
                         android:layout_height="wrap_content"
                         android:fontFamily="monospace"
                         android:text="@string/tag_value_placeholder"
-                        android:textAppearance="?attr/textAppearanceBodyLarge"
+                        android:textAppearance="?attr/textAppearanceBodyMedium"
                         android:textStyle="bold"
                         tools:text="08" />
                 </LinearLayout>
@@ -89,7 +89,7 @@
                         android:layout_height="wrap_content"
                         android:layout_weight="1"
                         android:text="@string/label_atqa"
-                        android:textAppearance="?attr/textAppearanceBodyLarge" />
+                        android:textAppearance="?attr/textAppearanceBodyMedium" />
 
                     <TextView
                         android:id="@+id/textAtqa"
@@ -97,7 +97,7 @@
                         android:layout_height="wrap_content"
                         android:fontFamily="monospace"
                         android:text="@string/tag_value_placeholder"
-                        android:textAppearance="?attr/textAppearanceBodyLarge"
+                        android:textAppearance="?attr/textAppearanceBodyMedium"
                         android:textStyle="bold"
                         tools:text="04 00" />
                 </LinearLayout>
@@ -113,7 +113,7 @@
                         android:layout_height="wrap_content"
                         android:layout_weight="1"
                         android:text="@string/label_ats"
-                        android:textAppearance="?attr/textAppearanceBodyLarge" />
+                        android:textAppearance="?attr/textAppearanceBodyMedium" />
 
                     <TextView
                         android:id="@+id/textAts"
@@ -121,7 +121,7 @@
                         android:layout_height="wrap_content"
                         android:fontFamily="monospace"
                         android:text="@string/tag_value_placeholder"
-                        android:textAppearance="?attr/textAppearanceBodyLarge"
+                        android:textAppearance="?attr/textAppearanceBodyMedium"
                         android:textStyle="bold"
                         tools:text="No" />
                 </LinearLayout>
@@ -137,40 +137,18 @@
                         android:layout_height="wrap_content"
                         android:layout_weight="1"
                         android:text="@string/label_prng"
-                        android:textAppearance="?attr/textAppearanceBodyLarge" />
+                        android:textAppearance="?attr/textAppearanceBodyMedium" />
 
                     <TextView
                         android:id="@+id/textPrng"
                         android:layout_width="wrap_content"
                         android:layout_height="wrap_content"
                         android:text="@string/tag_value_placeholder"
-                        android:textAppearance="?attr/textAppearanceBodyLarge"
+                        android:textAppearance="?attr/textAppearanceBodyMedium"
                         android:textStyle="bold"
                         tools:text="Static" />
                 </LinearLayout>
 
-                <LinearLayout
-                    android:layout_width="match_parent"
-                    android:layout_height="wrap_content"
-                    android:layout_marginTop="4dp"
-                    android:orientation="horizontal">
-
-                    <TextView
-                        android:layout_width="0dp"
-                        android:layout_height="wrap_content"
-                        android:layout_weight="1"
-                        android:text="@string/label_type"
-                        android:textAppearance="?attr/textAppearanceBodyLarge" />
-
-                    <TextView
-                        android:id="@+id/textType"
-                        android:layout_width="wrap_content"
-                        android:layout_height="wrap_content"
-                        android:text="@string/tag_value_placeholder"
-                        android:textAppearance="?attr/textAppearanceBodyLarge"
-                        android:textStyle="bold"
-                        tools:text="MIFARE Classic 1K" />
-                </LinearLayout>
             </LinearLayout>
         </com.google.android.material.card.MaterialCardView>
 
@@ -199,7 +177,7 @@
                     android:layout_height="wrap_content"
                     android:gravity="center"
                     android:text="@string/reader_keys_title"
-                    android:textAppearance="?attr/textAppearanceTitleLarge" />
+                    android:textAppearance="?attr/textAppearanceTitleMedium" />
 
                 <!-- 单元格由 ReaderFragment 动态填充：扇区 0-7 一组、8-15 一组（各 9 列 × 3 行） -->
                 <GridLayout
@@ -222,7 +200,7 @@
                     android:layout_marginTop="8dp"
                     android:gravity="center"
                     android:text="@string/reader_keys_hint"
-                    android:textAppearance="?attr/textAppearanceBodyMedium" />
+                    android:textAppearance="?attr/textAppearanceBodySmall" />
             </LinearLayout>
         </com.google.android.material.card.MaterialCardView>
 
@@ -257,7 +235,7 @@
             android:layout_height="wrap_content"
             android:layout_marginTop="8dp"
             android:gravity="center"
-            android:textAppearance="?attr/textAppearanceBodyMedium"
+            android:textAppearance="?attr/textAppearanceBodySmall"
             android:visibility="gone"
             tools:text="已保存：Download/Chameleon/C67C2796_08_0400.eml"
             tools:visibility="visible" />

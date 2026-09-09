@@ -14,7 +14,7 @@ class DeviceAdapter(
 ) : ListAdapter<DiscoveredDevice, DeviceAdapter.ViewHolder>(DIFF_CALLBACK) {
 
     class ViewHolder(
-        private val binding: ItemDeviceBinding,
+        private val binding: ItemDeviceBinding, //由item_device.xml自动编译生成
         private val onDeviceClick: (DiscoveredDevice) -> Unit,
     ) : RecyclerView.ViewHolder(binding.root) {
 
@@ -29,13 +29,13 @@ class DeviceAdapter(
         }
     }
 
-    override fun onCreateViewHolder(parent: ViewGroup, viewType: Int): ViewHolder =
+    override fun onCreateViewHolder(parent: ViewGroup, viewType: Int): ViewHolder = //低频,只有池内view不够才调用
         ViewHolder(
             ItemDeviceBinding.inflate(LayoutInflater.from(parent.context), parent, false),
             onDeviceClick,
         )
 
-    override fun onBindViewHolder(holder: ViewHolder, position: Int) {
+    override fun onBindViewHolder(holder: ViewHolder, position: Int) {  //高频,每当一条数据滚进屏幕，拿一个(新建或回收的)ViewHolder 把数据画上去
         holder.bind(getItem(position))
     }
 
@@ -43,10 +43,10 @@ class DeviceAdapter(
 
         val DIFF_CALLBACK = object : DiffUtil.ItemCallback<DiscoveredDevice>() {
             override fun areItemsTheSame(oldItem: DiscoveredDevice, newItem: DiscoveredDevice) =
-                oldItem.address == newItem.address
+                oldItem.address == newItem.address  //比较唯一号
 
             override fun areContentsTheSame(oldItem: DiscoveredDevice, newItem: DiscoveredDevice) =
-                oldItem == newItem
+                oldItem == newItem  //比较每个字段
         }
 
         /** RSSI（dBm）映射为 0~3 的信号等级，阈值参考 nRF Toolbox 的常用分档 */

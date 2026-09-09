@@ -26,7 +26,7 @@ class ChameleonSession(private val client: ChameleonBleClient) {
     /** 读取设备当前工作模式 */
     suspend fun getDeviceMode(): DeviceMode {
         val resp = request(ChameleonCommand.GET_DEVICE_MODE)
-        requireStatus(resp, ChameleonStatus.SUCCESS)
+        requireStatus(resp, ChameleonStatus.SUCCESS)    //检查状态值,不对抛异常
         return if (resp.data.isNotEmpty() && resp.data[0].toInt() != 0) DeviceMode.READER else DeviceMode.EMULATOR
     }
 
@@ -34,9 +34,9 @@ class ChameleonSession(private val client: ChameleonBleClient) {
     suspend fun getBatteryInfo(): Pair<Int, Int> {
         val resp = request(ChameleonCommand.GET_BATTERY_INFO)
         requireStatus(resp, ChameleonStatus.SUCCESS)
-        require(resp.data.size >= 3) { "GET_BATTERY_INFO 响应数据异常" }
-        val voltageMv = ((resp.data[0].toInt() and 0xFF) shl 8) or (resp.data[1].toInt() and 0xFF)
-        return voltageMv to (resp.data[2].toInt() and 0xFF)
+        require(resp.data.size >= 3) { "GET_BATTERY_INFO 响应数据异常" }  //断言,检查入参,check用于检查内部状态,抛的异常不同
+        val voltageMv = ((resp.data[0].toInt() and 0xFF) shl 8) or (resp.data[1].toInt() and 0xFF)  //Kotlin 的 Byte 是带符号的,.toInt() and 0xFF用于去掉符号位
+        return voltageMv to (resp.data[2].toInt() and 0xFF) //中缀 to 造出 Pair
     }
 
     /** 切换设备工作模式（切换动作耗时较长，超时放宽） */
@@ -59,8 +59,8 @@ class ChameleonSession(private val client: ChameleonBleClient) {
         require(data.size >= 5) { "HF14A_SCAN 响应数据异常" }
         val uidLen = data[0].toInt() and 0xFF
         require(data.size >= 5 + uidLen + 0) { "HF14A_SCAN 响应数据异常" }
-        val uid = data.copyOfRange(1, 1 + uidLen)
-        val atqa = data.copyOfRange(1 + uidLen, 3 + uidLen)
+        val uid = data.copyOfRange(1, 1 + uidLen)           // UID:从 1 开始,长 uidLen
+        val atqa = data.copyOfRange(1 + uidLen, 3 + uidLen) // ATQA:紧跟 UID 后,固定 2 字节
         val sak = data[3 + uidLen].toInt() and 0xFF
         val atsLen = data[4 + uidLen].toInt() and 0xFF
         val ats = data.copyOfRange(5 + uidLen, 5 + uidLen + atsLen)
@@ -106,14 +106,14 @@ class ChameleonSession(private val client: ChameleonBleClient) {
         // 初始全 1（全部跳过），再把需检查的密钥位清 0；
         // [shouldCheck] 让调用方排除已恢复的位（如二次字典攻击只查缺失位）
         val mask = ByteArray(MASK_SIZE) { 0xFF.toByte() }
-        for (s in 0 until sectorCount) {
-            for ((type, bit) in listOf(KeyType.A to 0b10, KeyType.B to 0b01)) {
+        for (s in 0 until sectorCount) {    //16个扇区
+            for ((type, bit) in listOf(KeyType.A to 0b10, KeyType.B to 0b01)) { // a/b两个密钥
                 if (shouldCheck(s, type)) {
                     mask[s / 4] = (mask[s / 4].toInt() and (bit shl (6 - (s % 4) * 2)).inv()).toByte()
                 }
             }
         }
-        val payload = mask + keys.reduce { acc, key -> acc + key }
+        val payload = mask + keys.reduce { acc, key -> acc + key }  //将keys字节数组拼成大 ByteArray,acc是上轮结果,key是当前遍历的元素
 
         val resp = request(ChameleonCommand.MF1_CHECK_KEYS_OF_SECTORS, payload, timeoutMs)
         requireStatus(resp, ChameleonStatus.HF_TAG_OK)
@@ -122,8 +122,8 @@ class ChameleonSession(private val client: ChameleonBleClient) {
         val found = resp.data.copyOfRange(0, MASK_SIZE)
         return (0 until sectorCount).map { s ->
             val shift = 6 - (s % 4) * 2
-            val bits = (found[s / 4].toInt() shr shift) and 0b11
-            val keyBase = MASK_SIZE + s * 2 * MF1_KEY_SIZE
+            val bits = (found[s / 4].toInt() shr shift) and 0b11    // 取出本扇区的 2 个 bit
+            val keyBase = MASK_SIZE + s * 2 * MF1_KEY_SIZE          //本扇区密钥的起点
             SectorKeys(
                 sector = s,
                 keyA = if (bits and 0b10 != 0) {

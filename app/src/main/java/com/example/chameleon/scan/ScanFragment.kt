@@ -36,12 +36,12 @@ class ScanFragment : Fragment() {
     private val scanViewModel: ScanViewModel by viewModels()
     private val mainViewModel: MainViewModel by activityViewModels()
 
-    private val adapter = DeviceAdapter { device ->
+    private val adapter = DeviceAdapter { device ->     //点击时的回调
         scanViewModel.stopScan()
         mainViewModel.connectDevice(device.address, device.name)
     }
 
-    private val permissionLauncher =
+    private val permissionLauncher =    //权限申请
         registerForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { result ->
             if (result.values.all { it }) {
                 scanViewModel.startScan()
@@ -89,14 +89,14 @@ class ScanFragment : Fragment() {
     // ------------------------------------------------------------------
 
     private fun renderScanState(state: ScanViewModel.ScanState) {
-        val devices = when (state) {
+        val devices = when (state) {        //从状态中取出设备列表
             is ScanViewModel.ScanState.Scanning -> state.devices
             is ScanViewModel.ScanState.Finished -> state.devices
             else -> emptyList()
         }
-        adapter.submitList(devices)
+        adapter.submitList(devices)     //刷新显示
 
-        when (state) {
+        when (state) {  //设置按钮状态
             ScanViewModel.ScanState.Idle -> {
                 binding.textScanStatus.setText(R.string.state_scan_ready)
                 binding.btnScanToggle.setText(R.string.btn_scan)
@@ -127,15 +127,15 @@ class ScanFragment : Fragment() {
 
     private fun renderConnectionState(state: MainViewModel.ConnectionState) {
         val connected = state is MainViewModel.ConnectionState.Connected
-        binding.layoutScan.isVisible = !connected
-        binding.layoutConnected.isVisible = connected
+        binding.layoutScan.isVisible = !connected           // 未连接:显示扫描界面
+        binding.layoutConnected.isVisible = connected       // 已连接:显示设备信息卡
         if (connected && state is MainViewModel.ConnectionState.Connected) {
             binding.textDeviceName.text = state.name
             binding.textDeviceAddress.text = state.address
         }
         binding.btnDisconnect.isEnabled = connected ||
             state is MainViewModel.ConnectionState.Connecting
-        if (!connected) {
+        if (state is MainViewModel.ConnectionState.Disconnected) {
             // 断开后回到本页可直接重新扫描
             requestPermissionsAndScan()
         }
