@@ -92,6 +92,13 @@ object ChameleonCommand {
      */
     const val HF14A_SET_ANTI_COLL_DATA = 4001
 
+    /**
+     * 开/关 Mifare 模拟卡的 mfkey32 认证日志（对齐 CLI `hf mf econfig
+     * --enable-log`）。请求 DATA：enable[1]（1=开启 0=关闭）；status=SUCCESS。
+     * 开启后模拟卡被读卡器认证时的 NT/NR/AR 参数会被记录，供 mfkey32 离线恢复密钥。
+     */
+    const val MF1_SET_DETECTION_ENABLE = 4004
+
     /** 命令码转可读名称，用于日志展示 */
     fun nameOf(cmd: Int): String = when (cmd) {
         GET_APP_VERSION -> "GET_APP_VERSION"
@@ -114,6 +121,7 @@ object ChameleonCommand {
         MF1_CHECK_KEYS_OF_SECTORS -> "MF1_CHECK_KEYS_OF_SECTORS"
         MF1_WRITE_EMU_BLOCK_DATA -> "MF1_WRITE_EMU_BLOCK_DATA"
         HF14A_SET_ANTI_COLL_DATA -> "HF14A_SET_ANTI_COLL_DATA"
+        MF1_SET_DETECTION_ENABLE -> "MF1_SET_DETECTION_ENABLE"
         else -> "CMD_%d".format(cmd)
     }
 }

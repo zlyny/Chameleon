@@ -21,7 +21,7 @@ ChameleonUltra 的 Android 客户端，通过 BLE（Nordic UART Service）与设
 | 密钥复用       | Nested 命中后立即用该密钥对未恢复位再查一轮（对齐 CLI autopwn 的 try_key）——全卡共用密钥的卡一次命中即可顺带恢复多个扇区 |
 | Dump 卡片库   | 用已恢复密钥逐扇区读块，未破解扇区置 0；trailer 块的 KeyA/KeyB 区域读出恒为 0（协议安全设计），按已恢复密钥对称回填（KeyA 命中且 KeyB 已知时两者都覆盖，反之亦然）；以 `UID<UID>_SAK<SAK>_ATQA<ATQA>.eml`（如 `UID1E6FE3A6_SAK08_ATQA0400.eml`）存入 app 专属卡片库（免权限、可枚举可删除） |
 | 卡片管理       | 卡片页列出卡片库：**写入设备**（切模拟卡模式 → 反碰撞数据 → 分帧写 64 块，对齐 CLI `hf mf eload`）、**查看数据**（按扇区 hex 展示，全 0 扇区标注未破解）、**删除**（确认后移除） |
-| 通信日志       | 独立日志页，十六进制 TX / RX / 错误分色，自动滚动，可清空                               |
+| 通信日志       | 独立日志页，十六进制 TX / RX / 错误分色，自动滚动，一键复制 / 清空                         |
 | 权限适配       | Android 12+（BLUETOOTH\_SCAN / CONNECT）与旧版（位置权限）双路径；卡片库为 app 专属目录，无存储权限需求 |
 | JNI 链路     | `ChameleonNative.staticnestedRecover` / `nestedRecover`：NDK 移植的 Crypto1 求解（crapto1 + nested_util 单线程化），darkside 预留 |
 

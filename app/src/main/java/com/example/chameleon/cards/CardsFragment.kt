@@ -83,8 +83,16 @@ class CardsFragment : Fragment() {
 
     override fun onStart() {
         super.onStart()
-        // 每次进入页面重扫：Reader 页可能刚 Dump 了新卡片
+        // Fragment 创建后 onStart 仅触发一次（覆盖首次进入）
         viewModel.refresh()
+    }
+
+    override fun onHiddenChanged(hidden: Boolean) {
+        super.onHiddenChanged(hidden)
+        // MainActivity 以 show/hide 切换页面，切页不触发 onStart/onStop，
+        // 只回调本方法。每次重新可见时重扫卡片库：Reader 页可能刚 Dump
+        // 了新卡片，不重扫就看不到（旧版只依赖 onStart，故需重启才显示）
+        if (!hidden) viewModel.refresh()
     }
 
     override fun onDestroyView() {

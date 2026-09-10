@@ -693,6 +693,11 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 s.setAntiCollData(uid, atqa, sak)
                 appendLog(LogKind.INFO, " - 反碰撞数据已设置（UID/ATQA/SAK）")
 
+                // 开启 mfkey32 认证日志（对齐 CLI `hf mf econfig --enable-log`），
+                // 供模拟卡被认证后离线恢复未知扇区密钥
+                s.setDetectionEnable(true)
+                appendLog(LogKind.INFO, " - mfkey32 认证日志已开启")
+
                 // 分块写入：每帧 16 块（1K 卡 4 帧），进度随帧输出
                 val blocksPerFrame = 16
                 var block = 0

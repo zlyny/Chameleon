@@ -1,5 +1,8 @@
 package com.example.chameleon.log
 
+import android.content.ClipData
+import android.content.ClipboardManager
+import android.os.Build
 import android.os.Bundle
 import android.text.SpannableStringBuilder
 import android.text.Spanned
@@ -16,11 +19,12 @@ import androidx.lifecycle.repeatOnLifecycle
 import com.example.chameleon.MainViewModel
 import com.example.chameleon.R
 import com.example.chameleon.databinding.FragmentLogBinding
+import com.google.android.material.snackbar.Snackbar
 import kotlinx.coroutines.launch
 
 /**
  * 日志页：展示协议通信日志（TX/RX 帧、流程信息、错误提示），
- * 按类型着色并自动滚动到底部，支持清空。
+ * 按类型着色并自动滚动到底部，支持一键复制与清空。
  */
 class LogFragment : Fragment() {
 
@@ -40,6 +44,7 @@ class LogFragment : Fragment() {
 
     override fun onViewCreated(view: View, savedInstanceState: Bundle?) {
         super.onViewCreated(view, savedInstanceState)
+        binding.btnCopyLog.setOnClickListener { copyLogToClipboard() }
         binding.btnClearLog.setOnClickListener { viewModel.clearLog() }
 
         viewLifecycleOwner.lifecycleScope.launch {
@@ -52,6 +57,27 @@ class LogFragment : Fragment() {
     override fun onDestroyView() {
         _binding = null
         super.onDestroyView()
+    }
+
+    /**
+     * 把当前全部日志（纯文本，每条一行）写入系统剪贴板，便于粘贴到
+     * 其他应用分析。着色等信息不会进入剪贴板，只复制文本内容。
+     */
+    private fun copyLogToClipboard() {
+        val entries = viewModel.log.value
+        if (entries.isEmpty()) {
+            Snackbar.make(binding.root, R.string.log_copy_empty, Snackbar.LENGTH_SHORT).show()
+            return
+        }
+        val clipboard = ContextCompat.getSystemService(requireContext(), ClipboardManager::class.java)
+            ?: return
+        val text = entries.joinToString("\n") { it.text }
+        clipboard.setPrimaryClip(ClipData.newPlainText(getString(R.string.log_title), text))
+        // Android 13+ 复制纯文本时系统会显示统一的复制成功提示，
+        // 再弹 Snackbar 会重复；Android 12 及以下自行提示
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) {
+            Snackbar.make(binding.root, getString(R.string.log_copied, entries.size), Snackbar.LENGTH_SHORT).show()
+        }
     }
 
     private fun renderLog(entries: List<MainViewModel.LogEntry>) {

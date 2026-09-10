@@ -53,6 +53,8 @@ Java_com_example_chameleon_jni_ChameleonNative_nativeVersion(
  *
  * 返回候选密钥列表（每个元素为 48bit 密钥，按命中概率降序），
  * 非法 NT（非 Static 漏洞卡）返回空数组。
+ * gen2 卡破解 KeyB 时先按 dist=161 求解，无候选则回退 dist=160
+ * 重解一次（不同批次卡的 PRNG 步进存在 161/160 两种实测值）。
  */
 extern "C" JNIEXPORT jlongArray JNICALL
 Java_com_example_chameleon_jni_ChameleonNative_staticnestedRecover(
@@ -64,53 +66,68 @@ Java_com_example_chameleon_jni_ChameleonNative_staticnestedRecover(
     const jsize pairCount = env->GetArrayLength(ntPairs);
     jlong* pairs = env->GetLongArrayElements(ntPairs, nullptr);
 
-    std::vector<NtpKs1> pNK;
-    bool vulnerable = true;
-    uint32_t dist = 0;
-    bool distResolved = false;
-
+    // 先解包到本地缓冲并立即释放 JNI 数组引用，
+    // 之后（含 dist 回退重解）不再触碰 JNI 内存
+    std::vector<std::pair<uint32_t, uint32_t>> nts;
+    nts.reserve(pairCount);
     for (jsize i = 0; i < pairCount; i++) {
-        uint32_t nt1 = static_cast<uint32_t>(pairs[i] >> 32);
-        uint32_t nt2 = static_cast<uint32_t>(pairs[i] & 0xFFFFFFFFULL);
-
-        // 首组 NT 判定卡的 StaticNested 漏洞代次，决定 PRNG 前进步数
-        if (!distResolved) {
-            if (nt1 == kStaticGen1Nt) {
-                dist = 160; // st gen1
-            } else if (nt1 == kStaticGen2Nt) { // st gen2
-                if (targetType == 0x61) {
-                    dist = 161;
-                } else if (targetType == 0x60) {
-                    dist = 160;
-                } else {
-                    vulnerable = false;
-                    break;
-                }
-            } else {
-                // 不属于已知 Static 漏洞卡
-                vulnerable = false;
-                break;
-            }
-            distResolved = true;
-        }
-
-        uint32_t nttest = prng_successor(nt1, dist);
-        uint32_t ks1 = nt2 ^ nttest;
-        pNK.push_back(NtpKs1{nttest, ks1});
-        dist += 160;
+        nts.emplace_back(static_cast<uint32_t>(pairs[i] >> 32),
+                         static_cast<uint32_t>(pairs[i] & 0xFFFFFFFFULL));
     }
     env->ReleaseLongArrayElements(ntPairs, pairs, JNI_ABORT);
 
-    if (!vulnerable || pNK.empty()) {
+    if (nts.empty()) {
         return env->NewLongArray(0);
     }
 
-    uint32_t keyCount = 0;
-    uint64_t* keys = nested(pNK.data(), pNK.size(),
-                            static_cast<uint32_t>(uid), &keyCount);
+    // 首组 NT 判定卡的 StaticNested 漏洞代次，决定 PRNG 前进步数
+    const uint32_t nt1 = nts.front().first;
+    uint32_t dist = 0;
+    bool vulnerable = true;
+    if (nt1 == kStaticGen1Nt) {
+        dist = 160; // st gen1
+    } else if (nt1 == kStaticGen2Nt) { // st gen2
+        if (targetType == 0x61) {
+            dist = 161;
+        } else if (targetType == 0x60) {
+            dist = 160;
+        } else {
+            vulnerable = false;
+        }
+    } else {
+        // 不属于已知 Static 漏洞卡
+        vulnerable = false;
+    }
+    if (!vulnerable) {
+        return env->NewLongArray(0);
+    }
 
-    jlongArray result = toJavaKeys(env, keys, keyCount);
-    free(keys);
+    // 以初始步数 baseDist 推导每组 (ntp, ks1) 后求解：第 i 组 NT 的
+    // 前进步数为 baseDist + 160*i（Static 卡 PRNG 随认证次数规律前进）
+    auto solve = [&nts, uid, env](uint32_t baseDist) -> jlongArray {
+        std::vector<NtpKs1> pNK;
+        pNK.reserve(nts.size());
+        uint32_t dist = baseDist;
+        for (const auto& nt : nts) {
+            uint32_t nttest = prng_successor(nt.first, dist);
+            uint32_t ks1 = nt.second ^ nttest;
+            pNK.push_back(NtpKs1{nttest, ks1});
+            dist += 160;
+        }
+        uint32_t keyCount = 0;
+        uint64_t* keys = nested(pNK.data(), pNK.size(),
+                                static_cast<uint32_t>(uid), &keyCount);
+        jlongArray result = toJavaKeys(env, keys, keyCount);
+        free(keys);
+        return result;
+    };
+
+    jlongArray result = solve(dist);
+    // gen2 卡 KeyB 的 PRNG 前进步数实测存在 161/160 两种，首次求解
+    // 无候选时以 160 回退重解，避免漏掉正确密钥
+    if (env->GetArrayLength(result) == 0 && dist == 161) {
+        result = solve(160);
+    }
     return result;
 }
 

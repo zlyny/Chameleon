@@ -63,14 +63,17 @@
     <string name="log_title">通信日志</string>
     <string name="log_empty">日志为空。连接设备后操作读卡功能即可看到协议交互。</string>
     <string name="btn_clear_log">清空</string>
+    <string name="btn_copy_log">复制</string>
+    <string name="log_copied">已复制 %1$d 条日志</string>
+    <string name="log_copy_empty">日志为空，无可复制内容</string>
 
     <!-- 卡片管理页 -->
     <string name="cards_title">卡片管理</string>
     <string name="cards_hint">Dump 出的卡片存于本机卡片库，点「写入设备」加载到 Chameleon 模拟卡</string>
     <string name="cards_empty">卡片库为空\n读卡页 Dump 后的卡片会出现在这里</string>
     <string name="card_item_subtitle">SAK %1$s · ATQA %2$s · %3$d 块 · %4$s</string>
-    <string name="btn_card_write">写入设备</string>
-    <string name="btn_card_view">查看数据</string>
+    <string name="btn_card_write">写入槽</string>
+    <string name="btn_card_view">查看</string>
     <string name="btn_card_delete">删除</string>
     <string name="card_delete_confirm_title">删除卡片</string>
     <string name="card_delete_confirm_msg">确定删除 %1$s？该操作不可恢复。</string>

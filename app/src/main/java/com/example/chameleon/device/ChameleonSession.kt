@@ -288,6 +288,21 @@ class ChameleonSession(private val client: ChameleonBleClient) {
     }
 
     /**
+     * 开/关 mfkey32 认证日志（对齐 CLI `hf mf econfig --enable-log`）。
+     * 开启后模拟卡被读卡器认证时的参数会被固件记录，供后续 mfkey32 破解
+     * 恢复未知扇区密钥。幂等操作，重复开启无副作用。
+     *
+     * 请求 DATA：enable[1]（1=开启 0=关闭）
+     */
+    suspend fun setDetectionEnable(enabled: Boolean) {
+        val resp = request(
+            ChameleonCommand.MF1_SET_DETECTION_ENABLE,
+            byteArrayOf(if (enabled) 1 else 0),
+        )
+        requireStatus(resp, ChameleonStatus.SUCCESS)
+    }
+
+    /**
      * 验证单个块的密钥（用于候选密钥筛选）。认证失败不抛异常，返回 false。
      *
      * 请求 DATA：keyType[1]+block[1]+key[6]；status=HF_TAG_OK 即验证通过。

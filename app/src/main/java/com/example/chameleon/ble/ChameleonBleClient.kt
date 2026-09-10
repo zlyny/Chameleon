@@ -173,7 +173,9 @@ class ChameleonBleClient(private val centralManager: CentralManager) {
             throw ChameleonBleException("开启通知失败：${e.message}")
         }
 
-        mtu = target.maximumWriteValueLength(WriteType.WITH_RESPONSE) + 3
+        // maximumWriteValueLength(WITH_RESPONSE) 固定返回 512（假定固件支持 ATT Long
+        // Write），不反映真实 MTU；WITHOUT_RESPONSE 返回 min(协商 MTU - 3, 512)
+        mtu = target.maximumWriteValueLength(WriteType.WITHOUT_RESPONSE) + 3
         ready = true
         listener?.onReady(mtu)
     }
@@ -181,6 +183,11 @@ class ChameleonBleClient(private val centralManager: CentralManager) {
     /**
      * 发送一个协议帧。帧按当前有效载荷上限分片，逐片以有响应写
      * （WRITE_TYPE_WITH_RESPONSE）写入 RX 特征，保证可靠有序传输。
+     *
+     * 分片上限取 min(WITHOUT_RESPONSE, WITH_RESPONSE)：后者固定返回 512
+     * （假定固件支持 ATT Long Write），但 ChameleonUltra 的 NUS 特征上限仅
+     * 244 字节且不支持长写，超过 MTU-3 的单片会被固件以 Application Error
+     * (0x80) 拒绝——模拟卡块写入（267 字节帧）失败即源于此。
      *
      * @throws ChameleonBleException 任一分片写入失败
      */
@@ -192,7 +199,10 @@ class ChameleonBleClient(private val centralManager: CentralManager) {
         // 回调的到达顺序不保证（设备可能先回响应帧再确认写），写完后记录
         // 会导致 TX/RX 日志顺序颠倒
         listener?.onFrameSent(frame)
-        val maxLength = target.maximumWriteValueLength(WriteType.WITH_RESPONSE)
+        val maxLength = minOf(
+            target.maximumWriteValueLength(WriteType.WITHOUT_RESPONSE),
+            target.maximumWriteValueLength(WriteType.WITH_RESPONSE),
+        )
         frame.encode().chunked(maxLength).forEach { chunk ->    //按mtu分包写
             rx.write(chunk, WriteType.WITH_RESPONSE)
         }
