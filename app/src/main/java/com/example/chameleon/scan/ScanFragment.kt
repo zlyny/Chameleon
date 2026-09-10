@@ -129,7 +129,8 @@ class ScanFragment : Fragment() {
         val connected = state is MainViewModel.ConnectionState.Connected
         binding.layoutScan.isVisible = !connected           // 未连接:显示扫描界面
         binding.layoutConnected.isVisible = connected       // 已连接:显示设备信息卡
-        if (connected && state is MainViewModel.ConnectionState.Connected) {
+        // 第 129 行的 is 判断已做智能转换，此处直接判子类型即可取 name/address
+        if (state is MainViewModel.ConnectionState.Connected) {
             binding.textDeviceName.text = state.name
             binding.textDeviceAddress.text = state.address
         }

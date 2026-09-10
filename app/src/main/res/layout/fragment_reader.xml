@@ -151,15 +151,27 @@
 
             </LinearLayout>
         </com.google.android.material.card.MaterialCardView>
-
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="16dp"
+        android:orientation="horizontal">
         <!-- 读卡：读取卡号并检测 PRNG（模拟卡模式时自动切换为读卡器模式） -->
         <com.google.android.material.button.MaterialButton
             android:id="@+id/btnRead"
-            android:layout_width="match_parent"
+            android:layout_width="0dp"
             android:layout_height="wrap_content"
-            android:layout_marginTop="16dp"
+            android:layout_marginStart="4dp"
+            android:layout_weight="1"
             android:text="@string/btn_read" />
-
+        <com.google.android.material.button.MaterialButton
+            android:id="@+id/btnMfkey32"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_marginStart="4dp"
+            android:layout_weight="1"
+            android:text="@string/btn_mfkey32" />
+    </LinearLayout>
         <!-- 密钥矩阵卡片：行=A/B 密钥，列=扇区 0~15，图标见 @drawable/ic_key_* -->
         <com.google.android.material.card.MaterialCardView
             android:layout_width="match_parent"

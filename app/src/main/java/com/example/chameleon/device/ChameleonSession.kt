@@ -364,6 +364,9 @@ class ChameleonSession(private val client: ChameleonBleClient) {
         /** 每扇区最后一块为 trailer：keyA[0..5] + accessBits[6..8] + 通用字节[9] + keyB[10..15] */
         const val MF1_TRAILER_BLOCK_IN_SECTOR = 3
 
+        /** trailer 内访问控制位区域（access bits + 通用字节）的起始偏移，长度 4 字节 */
+        const val MF1_TRAILER_ACCESS_OFFSET = 6
+
         /** trailer 内 KeyB 的起始偏移 */
         const val MF1_TRAILER_KEY_B_OFFSET = 10
 

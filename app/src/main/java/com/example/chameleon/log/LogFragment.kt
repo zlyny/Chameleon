@@ -19,7 +19,7 @@ import androidx.lifecycle.repeatOnLifecycle
 import com.example.chameleon.MainViewModel
 import com.example.chameleon.R
 import com.example.chameleon.databinding.FragmentLogBinding
-import com.google.android.material.snackbar.Snackbar
+import com.example.chameleon.util.showSnackbar
 import kotlinx.coroutines.launch
 
 /**
@@ -66,7 +66,7 @@ class LogFragment : Fragment() {
     private fun copyLogToClipboard() {
         val entries = viewModel.log.value
         if (entries.isEmpty()) {
-            Snackbar.make(binding.root, R.string.log_copy_empty, Snackbar.LENGTH_SHORT).show()
+            showSnackbar(R.string.log_copy_empty)
             return
         }
         val clipboard = ContextCompat.getSystemService(requireContext(), ClipboardManager::class.java)
@@ -76,7 +76,7 @@ class LogFragment : Fragment() {
         // Android 13+ 复制纯文本时系统会显示统一的复制成功提示，
         // 再弹 Snackbar 会重复；Android 12 及以下自行提示
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) {
-            Snackbar.make(binding.root, getString(R.string.log_copied, entries.size), Snackbar.LENGTH_SHORT).show()
+            showSnackbar(getString(R.string.log_copied, entries.size))
         }
     }
 

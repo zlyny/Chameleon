@@ -24,15 +24,16 @@ data class DumpCard(
  * 无法支撑卡片管理，已迁移至此（旧 Download 文件不受影响）。
  *
  * 文件格式为 MCT / Proxmark / CLI `hf mf eload` 通用的 eml 文本：
- * 每个数据块一行 32 个大写十六进制字符；未破解扇区为全 0 行。
- * 文件名 `UID<UID>_SAK<SAK>_ATQA<ATQA>.eml` 即元数据（ATQA 为线上
- * 字节序，可逆向解析回原始字节），无需额外索引文件。
+ * 每个数据块一行 32 个大写十六进制字符；未读取成功的字节以 XX 记录
+ * （见 [DumpContent]，读取时掩码置 false、数值为 0），旧版全 0 行仍
+ * 兼容读取（全部视为已知）。文件名 `UID<UID>_SAK<SAK>_ATQA<ATQA>.eml`
+ * 即元数据（ATQA 为线上字节序，可逆向解析回原始字节），无需额外索引文件。
  *
  * Room 扩展预留（后续版本）：为"标记破解失败 / 读写失败扇区"引入
  * Room 实体（以 [DumpCard.fileName] 为主键，记录每扇区状态与备注），
  * 本仓库保持 API 不变（list/read/save/delete），由文件扫描升级为
  * 数据库查询即可，UI 层无需改动。当前阶段每扇区状态可直接从内容
- * 推导（扇区全 0 = 未破解），查看对话框即按此展示。
+ * 推导（扇区全 XX = 未破解），查看对话框即按此展示。
  */
 class DumpRepository(private val context: Context) {
 
@@ -47,43 +48,55 @@ class DumpRepository(private val context: Context) {
             .sortedByDescending { it.savedAtMillis }
 
     /** 保存 dump（同名覆盖，即同一张卡重新 dump 时更新），返回卡片条目 */
-    fun save(tag: TagInfo, blocks: ByteArray): DumpCard {
-        require(blocks.size % ChameleonSession.MF1_BLOCK_SIZE == 0) { "块数据长度不是 16 的倍数" }
+    fun save(tag: TagInfo, content: DumpContent): DumpCard {
         val fileName = "UID${tag.uidHex}_SAK${tag.sakHex}_ATQA${tag.atqaHex}$FILE_EXT"
         val file = File(dir, fileName)
-        file.writeText(buildEmlContent(blocks), Charsets.US_ASCII)
+        file.writeText(buildEmlContent(content), Charsets.US_ASCII)
         return parseCard(file) ?: throw IOException("生成卡片条目失败")
     }
 
-    /** 读取卡片全部块数据；文件缺失或内容非法返回 null */
-    fun readBlocks(fileName: String): ByteArray? {
+    /**
+     * 读取卡片内容（块数据 + 未知掩码）；文件缺失或内容非法返回 null。
+     * XX 字节解析为未知（数值 0），其余十六进制对解析为已知字节。
+     */
+    fun read(fileName: String): DumpContent? {
         val file = File(dir, fileName)
         if (!file.isFile) return null
         return runCatching {
             val hex = file.readText(Charsets.US_ASCII).filterNot { it.isWhitespace() }
-            val data = ByteArray(hex.length / 2) { i ->
-                ((Character.digit(hex[i * 2], 16) shl 4) or Character.digit(hex[i * 2 + 1], 16)).toByte()
+            require(hex.length % 2 == 0)
+            val size = hex.length / 2
+            require(size % ChameleonSession.MF1_BLOCK_SIZE == 0)
+            val bytes = ByteArray(size)
+            val known = BooleanArray(size)
+            for (i in 0 until size) {
+                // XX = 未知字节（未读取成功/未破解）：保持数值 0、掩码 false
+                if (hex[i * 2] == 'X' || hex[i * 2 + 1] == 'X') continue
+                val value =
+                    (Character.digit(hex[i * 2], 16) shl 4) or Character.digit(hex[i * 2 + 1], 16)
+                require(value in 0..0xFF) // 非法十六进制字符（digit 返回 -1）时中止
+                bytes[i] = value.toByte()
+                known[i] = true
             }
-            data.takeIf { it.size % ChameleonSession.MF1_BLOCK_SIZE == 0 }
+            DumpContent(bytes, known)
         }.getOrNull()
     }
 
     /** 删除卡片，返回是否删除成功 */
     fun delete(fileName: String): Boolean = File(dir, fileName).delete()
 
-    /** 块数据 -> eml 文本：每块一行大写十六进制 */
-    private fun buildEmlContent(blocks: ByteArray): String = buildString {
-        blocks.forEachChunk { chunk ->
-            append(chunk.joinToString("") { "%02X".format(it) })
+    /** 内容 -> eml 文本：每块一行大写十六进制，未知字节记为 XX */
+    private fun buildEmlContent(content: DumpContent): String = buildString {
+        for (block in 0 until content.blockCount) {
+            val from = block * ChameleonSession.MF1_BLOCK_SIZE
+            for (i in from until from + ChameleonSession.MF1_BLOCK_SIZE) {
+                if (content.known[i]) {
+                    append("%02X".format(content.bytes[i]))
+                } else {
+                    append("XX")
+                }
+            }
             append('\n')
-        }
-    }
-
-    private fun ByteArray.forEachChunk(action: (ByteArray) -> Unit) {
-        var offset = 0
-        while (offset < size) {
-            action(copyOfRange(offset, offset + ChameleonSession.MF1_BLOCK_SIZE))
-            offset += ChameleonSession.MF1_BLOCK_SIZE
         }
     }
 

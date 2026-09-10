@@ -23,6 +23,7 @@ import com.example.chameleon.device.KeyStatus
 import com.example.chameleon.device.KeyType
 import com.example.chameleon.device.PrngType
 import com.example.chameleon.device.SectorKeys
+import com.example.chameleon.util.showSnackbar
 import com.google.android.material.snackbar.Snackbar
 import kotlinx.coroutines.launch
 
@@ -33,8 +34,8 @@ import kotlinx.coroutines.launch
  * 3. 点击红色叉号——对该密钥位发起 Nested 攻击：Static PRNG 卡走
  *    StaticNested、Weak PRNG 卡走 Nested（自动适配）；攻击依赖随机数
  *    碰撞，单次未命中属正常现象，再次点击即可重试；
- * 4. 「Dump」——用已恢复密钥读取全卡数据存入 dump 卡片库（未破解扇区置 0），
- *    卡片管理页可查看 / 写入设备 / 删除。
+ * 4. 「Dump」——用已恢复密钥读取全卡数据存入 dump 卡片库（未读取成功的
+ *    字节记为 XX，见 DumpContent），卡片管理页可查看 / 写入槽 / 导出 / 删除。
  */
 class ReaderFragment : Fragment() {
 
@@ -87,7 +88,8 @@ class ReaderFragment : Fragment() {
         renderButtons()
 
         state.lastError?.let { message ->
-            Snackbar.make(binding.root, message, Snackbar.LENGTH_LONG).show()
+            // 统一经锚定底部导航的 Snackbar 展示，避免遮挡导航按钮
+            showSnackbar(message, Snackbar.LENGTH_LONG)
             viewModel.consumeLastError()    //用状态模拟事件,处理完需要清除(否则旋转或再次订阅会重新触发),但代价是会再次渲染一次,可以使用SharedFlow 或 Channel代替
         }
     }

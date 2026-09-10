@@ -52,8 +52,9 @@
     <string name="reader_keys_title">Keys</string>
     <string name="reader_keys_hint">绿勾 = 已恢复；点红叉Nested攻击</string>
     <string name="btn_read">Read</string>
+    <string name="btn_mfkey32">mfkey32</string>
     <string name="btn_reading">正在读卡…</string>
-    <string name="btn_recover_keys">Recover keys</string>
+    <string name="btn_recover_keys">Recover</string>
     <string name="btn_recovering">正在破解…</string>
     <string name="btn_dump">Dump</string>
     <string name="btn_dumping">正在读取…</string>
@@ -69,18 +70,29 @@
 
     <!-- 卡片管理页 -->
     <string name="cards_title">卡片管理</string>
-    <string name="cards_hint">Dump 出的卡片存于本机卡片库，点「写入设备」加载到 Chameleon 模拟卡</string>
+    <string name="cards_hint">Dump 出的卡片存于本机卡片库，点「写入槽」加载到 Chameleon 模拟卡，或「导出」为二进制文件到 Download 目录</string>
     <string name="cards_empty">卡片库为空\n读卡页 Dump 后的卡片会出现在这里</string>
     <string name="card_item_subtitle">SAK %1$s · ATQA %2$s · %3$d 块 · %4$s</string>
     <string name="btn_card_write">写入槽</string>
+    <string name="btn_card_Load">加载</string>
+    <string name="btn_card_writing">写入中…</string>
     <string name="btn_card_view">查看</string>
+    <string name="btn_card_export">导出</string>
     <string name="btn_card_delete">删除</string>
     <string name="card_delete_confirm_title">删除卡片</string>
     <string name="card_delete_confirm_msg">确定删除 %1$s？该操作不可恢复。</string>
     <string name="card_deleted">已删除 %1$s</string>
     <string name="card_write_start_failed">无法开始写入（未连接 / 设备忙 / 数据异常），详见日志</string>
+    <string name="card_read_failed">读取卡片数据失败</string>
+    <string name="card_export_done">已导出到 Download：%1$s</string>
+    <string name="card_export_failed">导出失败：%1$s</string>
+    <string name="card_export_permission_denied">存储权限被拒绝，无法导出到 Download 目录</string>
     <string name="card_view_title">卡片数据 · UID %1$s</string>
     <string name="card_view_sector_ok">扇区 %1$d</string>
-    <string name="card_view_sector_locked">扇区 %1$d · 未破解（全 0）</string>
-    <string name="card_view_trailer">扇区 %1$d · trailer</string>
+    <string name="card_view_sector_locked">扇区 %1$d · 未破解</string>
+    <string name="card_view_sector_partial">扇区 %1$d · 部分未读取</string>
+    <string name="card_view_legend">图例：</string>
+    <string name="card_view_legend_key">已恢复密钥</string>
+    <string name="card_view_legend_control">访问控制位</string>
+    <string name="card_view_legend_unknown">XX 未读取/未破解</string>
 </resources>

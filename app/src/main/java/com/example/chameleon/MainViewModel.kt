@@ -11,6 +11,7 @@ import com.example.chameleon.device.ChameleonSession
 import com.example.chameleon.device.ChameleonStatusException
 import com.example.chameleon.device.DeviceMode
 import com.example.chameleon.device.DumpCard
+import com.example.chameleon.device.DumpContent
 import com.example.chameleon.device.DumpRepository
 import com.example.chameleon.device.KeyDictionary
 import com.example.chameleon.device.KeyState
@@ -32,6 +33,7 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import java.util.Arrays
 
 /**
  * 应用级共享 ViewModel：管理 BLE 连接生命周期、设备工作模式缓存、
@@ -66,7 +68,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
         data object Dumping : ReaderPhase
 
-        /** 卡片管理页：dump 写入设备模拟卡中（读卡页按钮同样禁用） */
+        /** 卡片管理页：写入槽进行中（dump 写入设备模拟卡，读卡页按钮同样禁用） */
         data object WritingEmu : ReaderPhase
     }
 
@@ -78,6 +80,10 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         val sectors: List<SectorKeys> = emptyList(),
         /** 最近一次操作的错误提示（UI 用 Snackbar 展示后清除） */
         val lastError: String? = null,
+
+        /** 最近一次操作的成功提示（UI 用 Snackbar 展示后清除，与 [lastError] 对称） */
+        val lastSuccess: String? = null,
+
         /** 最近一次 dump 的保存位置 */
         val dumpLocation: String? = null,
     )
@@ -546,8 +552,17 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     /**
-     * Dump 全卡数据：逐扇区用已恢复的密钥读取 4 个块，未破解扇区以全 0 占位，
-     * 结果以 eml 文本存入 dump 卡片库（见 [DumpRepository]），供卡片管理页使用。
+     * Dump 全卡数据：逐扇区用已恢复的密钥读取 4 个块，结果以 eml 文本存入
+     * dump 卡片库（见 [DumpRepository]），供卡片管理页使用。
+     *
+     * 未读取成功的字节标记为未知（eml 中记 XX，见 [DumpContent]），三类来源：
+     * - 未破解扇区：整扇区 4 块保持未知；
+     * - 单块读取失败（访问位限制等）：该块 16 字节标记未知；
+     * - trailer 块：密钥区不以读出值为准（KeyA 恒读出全 0，KeyB 依访问位
+     *   可能不可读，均为 Mifare Classic 安全设计），按密钥矩阵回填——已破解
+     *   的密钥覆盖对应区域，未破解的区域标记未知；访问位区 [6:10] 保留真实
+     *   读出值，但读出全零视为读取失败（真实卡的访问控制位不会全零），
+     *   同样标记未知。
      */
     fun dumpCard() {
         val s = session ?: run {
@@ -567,24 +582,34 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         _readerState.update { it.copy(phase = ReaderPhase.Dumping, lastError = null) }
         viewModelScope.launch {
             try {
-                val blocks = ByteArray(
+                // 初始全部未知（XX）：只有成功读出或回填的字节才标记已知
+                val content = DumpContent.allUnknown(
                     ChameleonSession.MF1_SECTOR_COUNT *
                         ChameleonSession.MF1_BLOCKS_PER_SECTOR *
                         ChameleonSession.MF1_BLOCK_SIZE,
                 )
+                val bytes = content.bytes
+                val known = content.known
                 var failedBlocks = 0
                 for (sector in 0 until ChameleonSession.MF1_SECTOR_COUNT) {
                     val sectorKeys = state.sectors[sector]
                     // 优先 KeyA（KeyA 命中时固件通常已顺带恢复 KeyB）
                     val useKeyA = sectorKeys.keyA.status == KeyStatus.FOUND
                     val key = (if (useKeyA) sectorKeys.keyA else sectorKeys.keyB).key
-                    if (key == null) continue // 未破解扇区：保持全 0 占位
+                    if (key == null) continue // 未破解扇区：整扇区保持未知（XX）
                     val keyType = if (useKeyA) KeyType.A else KeyType.B
                     for (i in 0 until ChameleonSession.MF1_BLOCKS_PER_SECTOR) {
                         val block = sector * ChameleonSession.MF1_BLOCKS_PER_SECTOR + i
                         try {
                             val data = s.readBlock(block, keyType, key)
-                            data.copyInto(blocks, block * ChameleonSession.MF1_BLOCK_SIZE)
+                            val blockOffset = block * ChameleonSession.MF1_BLOCK_SIZE
+                            data.copyInto(bytes, blockOffset)
+                            Arrays.fill(
+                                known,
+                                blockOffset,
+                                blockOffset + ChameleonSession.MF1_BLOCK_SIZE,
+                                true,
+                            )
                         } catch (e: ChameleonStatusException) {
                             // 卡片离开：中断整个 dump；其余（如访问位限制）仅记块失败
                             if (e.status == ChameleonStatus.HF_TAG_NO.raw) throw e
@@ -594,11 +619,10 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     }
                 }
                 // trailer 块的 KeyA 对读卡器永远返回全 0，KeyB 在常规访问位配置下
-                // 同样不可读（Mifare Classic 安全设计）。按已恢复密钥对称回填：
-                // KeyA 命中 → 覆盖 byte 0-5，KeyB 已破解则同时覆盖 KeyB 区域；
-                // KeyB 命中 → 覆盖 byte 10-15，KeyA 已破解则同时覆盖 KeyA 区域
-                //（另一密钥的读出值可能为全 0，直接采用已知密钥更可靠）。
-                // access bits（byte 6-9）始终保留真实读出值。
+                // 同样不可读（Mifare Classic 安全设计）。密钥区不以读出值为准，
+                // 按已恢复密钥矩阵回填：已破解的密钥覆盖对应区域并标记已知，
+                // 未破解的区域标记未知（XX）；访问位区保留真实读出值，读出全零
+                // 视为读取失败，同样标记未知。
                 for (sector in 0 until ChameleonSession.MF1_SECTOR_COUNT) {
                     val trailerOffset =
                         (sector * ChameleonSession.MF1_BLOCKS_PER_SECTOR +
@@ -606,30 +630,41 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                             ChameleonSession.MF1_BLOCK_SIZE
                     val keys = state.sectors[sector]
                     val keyA = keys.keyA.key
+                    if (keyA != null) keyA.copyInto(bytes, trailerOffset)
+                    Arrays.fill(
+                        known,
+                        trailerOffset,
+                        trailerOffset + ChameleonSession.MF1_KEY_SIZE,
+                        keyA != null,
+                    )
                     val keyB = keys.keyB.key
-                    if (keyA != null) {
-                        keyA.copyInto(blocks, trailerOffset)
-                        keyB?.copyInto(
-                            blocks,
-                            trailerOffset + ChameleonSession.MF1_TRAILER_KEY_B_OFFSET,
-                        )
-                    } else if (keyB != null) {
+                    if (keyB != null) {
                         keyB.copyInto(
-                            blocks,
+                            bytes,
                             trailerOffset + ChameleonSession.MF1_TRAILER_KEY_B_OFFSET,
                         )
-                        // keyA 为 null 时无可用值，KeyA 区域保留读出值（通常为全 0）
+                    }
+                    Arrays.fill(
+                        known,
+                        trailerOffset + ChameleonSession.MF1_TRAILER_KEY_B_OFFSET,
+                        trailerOffset + ChameleonSession.MF1_BLOCK_SIZE,
+                        keyB != null,
+                    )
+                    val accessFrom = trailerOffset + ChameleonSession.MF1_TRAILER_ACCESS_OFFSET
+                    val accessTo = trailerOffset + ChameleonSession.MF1_TRAILER_KEY_B_OFFSET
+                    if (bytes.copyOfRange(accessFrom, accessTo).all { it == 0.toByte() }) {
+                        Arrays.fill(known, accessFrom, accessTo, false)
                     }
                 }
 
-                val saved = dumpRepository.save(tag, blocks)
+                val saved = dumpRepository.save(tag, content)
                 _readerState.update { it.copy(dumpLocation = saved.fileName) }
                 appendLog(
                     LogKind.INFO,
                     if (failedBlocks == 0) {
-                        "Dump 已存入卡片库：${saved.fileName}（卡片管理页可写入设备）"
+                        "Dump 已存入卡片库：${saved.fileName}（卡片管理页可写入槽）"
                     } else {
-                        "Dump 已存入卡片库：${saved.fileName}（${failedBlocks} 个块读取失败，已置 0）"
+                        "Dump 已存入卡片库：${saved.fileName}（${failedBlocks} 个块读取失败，标记为 XX）"
                     },
                 )
             } catch (e: Exception) {
@@ -645,13 +680,20 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         _readerState.update { it.copy(lastError = null) }
     }
 
+    /** 清除最近一次成功提示（UI 展示 Snackbar 后回调） */
+    fun consumeLastSuccess() {
+        _readerState.update { it.copy(lastSuccess = null) }
+    }
+
     /**
      * 把卡片库中的 dump 写入设备模拟卡（对齐 CLI `hf mf eload` + 反碰撞数据）：
      * 1. 切换设备到模拟卡模式；
      * 2. 设置反碰撞数据（UID/ATQA/SAK 与原卡一致）；
      * 3. 分块写入全部块数据（单帧上限 31 块，1K 卡 4 帧完成）。
      *
-     * 写入当前激活卡槽；完成后设备立即模拟这张卡。
+     * 写入当前激活卡槽；完成后设备立即模拟这张卡，成功经 lastSuccess
+     * 通知 UI 弹出 Snackbar。未知字节（XX，见 [DumpContent]）按 0x00
+     * 写入设备。
      *
      * @return false 表示未启动（未连接 / 设备忙 / 数据异常），原因见日志与 lastError
      */
@@ -664,11 +706,11 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             _readerState.update { it.copy(lastError = "设备忙（读卡或写入进行中），请稍后再试") }
             return false
         }
-        val blocks = dumpRepository.readBlocks(dump.fileName) ?: run {
+        val content = dumpRepository.read(dump.fileName) ?: run {
             _readerState.update { it.copy(lastError = "读取 dump 文件失败") }
             return false
         }
-        if (blocks.size != ChameleonSession.MF1_SECTOR_COUNT *
+        if (content.bytes.size != ChameleonSession.MF1_SECTOR_COUNT *
             ChameleonSession.MF1_BLOCKS_PER_SECTOR * ChameleonSession.MF1_BLOCK_SIZE
         ) {
             _readerState.update { it.copy(lastError = "dump 数据非 1K 卡（64 块），暂不支持") }
@@ -686,7 +728,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         _readerState.update { it.copy(phase = ReaderPhase.WritingEmu, lastError = null) }
         viewModelScope.launch {
             try {
-                appendLog(LogKind.INFO, "写入模拟卡：UID=${dump.uidHex}（${blocks.size / ChameleonSession.MF1_BLOCK_SIZE} 块）")
+                appendLog(LogKind.INFO, "写入模拟卡：UID=${dump.uidHex}（${content.blockCount} 块）")
                 ensureEmulatorMode(s)
 
                 // 反碰撞数据让模拟卡的卡号与原卡一致（ATS 留空）
@@ -699,6 +741,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 appendLog(LogKind.INFO, " - mfkey32 认证日志已开启")
 
                 // 分块写入：每帧 16 块（1K 卡 4 帧），进度随帧输出
+                val blocks = content.bytes
                 val blocksPerFrame = 16
                 var block = 0
                 while (block < blocks.size / ChameleonSession.MF1_BLOCK_SIZE) {
@@ -709,6 +752,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     appendLog(LogKind.INFO, " - 已写入块 $block")
                 }
                 appendLog(LogKind.INFO, "写入完成，设备正在模拟该卡")
+                _readerState.update { it.copy(lastSuccess = "已写入模拟卡：UID=${dump.uidHex}，设备正在模拟该卡") }
             } catch (e: Exception) {
                 handleReaderError("写入模拟卡失败", e)
             } finally {

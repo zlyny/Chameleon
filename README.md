@@ -19,10 +19,10 @@ ChameleonUltra 的 Android 客户端，通过 BLE（Nordic UART Service）与设
 | Static Nested | 点击红叉对该密钥位发起攻击：`MF1_STATIC_NESTED_ACQUIRE` 采集 NT → NDK 移植的 staticnested 算法求解 → `MF1_AUTH_ONE_KEY_BLOCK` 逐候选验证，日志格式对齐 CLI |
 | Nested (Weak) | Weak PRNG 卡自动适配：`MF1_DETECT_NT_DIST` 测 dist → `MF1_NESTED_ACQUIRE` 采集 (nt/nt_enc/par) → NDK 移植的 nested 算法在 dist±14 内枚举求解；攻击成功率有限，未命中属正常，再点重试 |
 | 密钥复用       | Nested 命中后立即用该密钥对未恢复位再查一轮（对齐 CLI autopwn 的 try_key）——全卡共用密钥的卡一次命中即可顺带恢复多个扇区 |
-| Dump 卡片库   | 用已恢复密钥逐扇区读块，未破解扇区置 0；trailer 块的 KeyA/KeyB 区域读出恒为 0（协议安全设计），按已恢复密钥对称回填（KeyA 命中且 KeyB 已知时两者都覆盖，反之亦然）；以 `UID<UID>_SAK<SAK>_ATQA<ATQA>.eml`（如 `UID1E6FE3A6_SAK08_ATQA0400.eml`）存入 app 专属卡片库（免权限、可枚举可删除） |
-| 卡片管理       | 卡片页列出卡片库：**写入设备**（切模拟卡模式 → 反碰撞数据 → 分帧写 64 块，对齐 CLI `hf mf eload`）、**查看数据**（按扇区 hex 展示，全 0 扇区标注未破解）、**删除**（确认后移除） |
+| Dump 卡片库   | 用已恢复密钥逐扇区读块，未读取成功的字节记为 **XX**（未知，eml 中保留，不与真实数据 00 混淆）；trailer 的密钥区不以读出值为准（KeyA 恒读出 0、KeyB 依访问位可能不可读，协议安全设计），按密钥矩阵回填已破解密钥、未破解区域记 XX，访问位区 [6:10] 读出全零视为读取失败；以 `UID<UID>_SAK<SAK>_ATQA<ATQA>.eml`（如 `UID1E6FE3A6_SAK08_ATQA0400.eml`）存入 app 专属卡片库（免权限、可枚举可删除） |
+| 卡片管理       | 卡片页列出卡片库：**写入槽**（切模拟卡模式 → 反碰撞数据 → 分帧写 64 块，对齐 CLI `hf mf eload`；进行中全部按钮禁用，完成 Snackbar 提示）、**查看**（按扇区 hex 展示：绿色 = 已恢复密钥、琥珀 = 访问控制位、红色 XX = 未读取；未破解 / 部分未读取扇区标注，附图例）、**导出**（二进制 .bin 到系统 Download 目录，同名自动加 " (n)" 序号；未破解 trailer 密钥区填 FF×6、访问位区填 FF 07 80 69、其余未知填 00）、**删除**（确认后移除） |
 | 通信日志       | 独立日志页，十六进制 TX / RX / 错误分色，自动滚动，一键复制 / 清空                         |
-| 权限适配       | Android 12+（BLUETOOTH\_SCAN / CONNECT）与旧版（位置权限）双路径；卡片库为 app 专属目录，无存储权限需求 |
+| 权限适配       | Android 12+（BLUETOOTH\_SCAN / CONNECT）与旧版（位置权限）双路径；卡片库为 app 专属目录；导出 Download：Android 10+ 走 MediaStore 免权限，Android 9 及以下运行时申请写存储权限 |
 | JNI 链路     | `ChameleonNative.staticnestedRecover` / `nestedRecover`：NDK 移植的 Crypto1 求解（crapto1 + nested_util 单线程化），darkside 预留 |
 
 破解流程（对齐 CLI `hf 14a info` → `hf mf nested` → `hf mf autopwn` 工作流）：
@@ -33,8 +33,9 @@ ChameleonUltra 的 Android 客户端，通过 BLE（Nordic UART Service）与设
 3. 点击红叉 — Nested 攻击（按 PRNG 自动分派）：Static 卡走 StaticNested，
    Weak 卡走 Nested（测 dist → 采 NT 三元组 → dist±14 枚举求解）；
    命中后自动密钥复用检查其余扇区；单次未命中属正常现象，再次点击即可重试
-4. **Dump** — 忽略未破解扇区，读取全卡数据存入卡片库；卡片页可查看 /
-   写入设备模拟（切模拟卡模式 + 反碰撞数据 + 64 块分帧写入）/ 删除
+4. **Dump** — 读取全卡数据存入卡片库（未读取成功的字节记 XX）；卡片页可
+   查看（密钥 / 控制位 / XX 着色）、写入槽（切模拟卡模式 + 反碰撞数据 +
+   64 块分帧写入）、导出 .bin（Download 目录）、删除
 
 BLE 能力基于 [Nordic Kotlin-BLE-Library](https://github.com/NordicSemiconductor/Kotlin-BLE-Library)
 （`no.nordicsemi.kotlin.ble:client-android:2.0.0-alpha19`，与 nRF Toolbox 4.4.1 同代 API），
@@ -46,8 +47,8 @@ BLE 能力基于 [Nordic Kotlin-BLE-Library](https://github.com/NordicSemiconduc
 MainActivity（launcher，单 Activity + 底部导航，Fragment 以 show/hide 切换保留状态）
 ├── 扫描页 ScanFragment    自动扫描 / 设备列表 / 连接 / 断开 / 电池查询
 ├── 读卡页 ReaderFragment   标签信息卡片 + 密钥矩阵（16 扇区 × A/B）+ Read / Recover / Dump
-├── 日志页 LogFragment     通信日志（TX/RX/错误分色）+ 清空
-└── 卡片页 CardsFragment   dump 卡片库：写入设备 / 查看数据 / 删除
+├── 日志页 LogFragment     通信日志（TX/RX/错误分色）+ 复制 / 清空
+└── 卡片页 CardsFragment   dump 卡片库：写入槽 / 查看 / 导出 / 删除
 
 顶部工具栏：连接状态副标题 + 设备工作模式图标（读卡器 / 模拟卡，与缓存的模式变量挂钩）
 ```
@@ -70,6 +71,7 @@ com.example.chameleon/
 │   ├── Mf1Models.kt              DeviceMode / PrngType / StaticNestedGen / TagInfo / SectorKeys 等数据模型
 │   ├── ChameleonSession.kt       suspend 命令集：模式 / 读卡 / PRNG / 代次检测 / 字典攻击 / 读写块 / 写模拟卡
 │   ├── KeyDictionary.kt          字典密钥列表（13 个内置弱密钥，单帧上限 83 个）
+│   ├── DumpContent.kt            dump 内容模型（块数据 + 未知掩码 XX，导出填充规则）
 │   └── DumpRepository.kt         dump 卡片库（app 专属目录：扫描 / 保存 / 读取 / 删除，预留 Room 扩展）
 ├── jni/
 │   └── ChameleonNative.kt        NDK 桥接（staticnestedRecover / nestedRecover / nativeVersion）
@@ -82,9 +84,11 @@ com.example.chameleon/
 ├── log/
 │   └── LogFragment.kt            日志页（分色渲染 + 自动滚动）
 ├── cards/
-│   ├── CardsFragment.kt          卡片管理页（写入设备 / 查看数据 / 删除确认）
-│   ├── CardsViewModel.kt         卡片库列表状态流（文件 IO 走 IO 调度器）
-│   └── DumpCardAdapter.kt        卡片列表适配器（ListAdapter + DiffUtil）
+│   ├── CardsFragment.kt          卡片管理页（写入槽 / 查看着色 / 导出 / 删除确认）
+│   ├── CardsViewModel.kt         卡片库列表状态流 + 导出 Download（MediaStore / 旧版双路径）
+│   └── DumpCardAdapter.kt        卡片列表适配器（ListAdapter + DiffUtil + 流程忙碌状态）
+├── util/
+│   └── Snackbars.kt              Snackbar 扩展（锚定底部导航上方，避免遮挡导航栏）
 ├── MainViewModel.kt           应用级共享 ViewModel：连接 / 模式缓存 / 读卡流程 / 写入模拟卡 / 日志
 └── MainActivity.kt            主界面：底部导航 + 工具栏状态渲染
 ```
@@ -188,14 +192,23 @@ cmake）会启动后立即静默退出。Gradle 官方明确警告不要让环�
    连接风暴，重试即可；若持续，检查设备是否已被其他主机占用。
 8. **dump 卡片库与写入模拟卡**：卡片库位于 app 专属外部目录
    `Android/data/<pkg>/files/dumps/`（免权限、可枚举、卸载即清理），文件名
-   `UID_x_SAK_x_ATQA_x.eml` 即元数据，无需索引文件；后续要标记"破解失败 /
-   读写失败扇区"时引入 Room（以文件名为主键，每扇区状态一列），`DumpRepository`
-   的 API 保持不变即可平滑切换。写入模拟卡 = `CHANGE_DEVICE_MODE` 切模拟卡 →
-   `HF14A_SET_ANTI_COLL_DATA`（uidLen+uid+atqa[2]+sak[1]+atsLen+ats）→
-   `MF1_WRITE_EMU_BLOCK_DATA`（blockStart[1]+data[N*16]，单帧上限 31 块，
-   实际按 16 块/帧 × 4 帧写入），两命令成功状态均为 `SUCCESS(0x0068)`。
+   `UID_x_SAK_x_ATQA_x.eml` 即元数据，无需索引文件；eml 中 **XX 表示未知字节**
+   （dump 时未读取成功 / 未破解，`DumpContent` 以 known 掩码建模，旧版全 0 行
+   兼容读取），后续要标记"破解失败 / 读写失败扇区"时引入 Room（以文件名为主键，
+   每扇区状态一列），`DumpRepository` 的 API 保持不变即可平滑切换。写入模拟卡 =
+   `CHANGE_DEVICE_MODE` 切模拟卡 → `HF14A_SET_ANTI_COLL_DATA`
+   （uidLen+uid+atqa[2]+sak[1]+atsLen+ats）→ `MF1_WRITE_EMU_BLOCK_DATA`
+   （blockStart[1]+data[N*16]，单帧上限 31 块，实际按 16 块/帧 × 4 帧写入），
+   两命令成功状态均为 `SUCCESS(0x0068)`；未知字节（XX）按 0x00 写入设备。
    CLI `hf mf eload` 只写块数据不设反碰撞数据，App 侧补设 UID/ATQA/SAK
    以保证模拟卡卡号与原卡一致（写入当前激活卡槽，卡槽选择为后续扩展）。
+   导出 .bin：未知字节按区域填充（trailer 密钥区 FF×6、访问位区 FF 07 80 69、
+   其余 00，见 `DumpContent.toExportBinary`）；Android 10+ 经 MediaStore 写
+   Download 免权限，Android 9 及以下需运行时 WRITE\_EXTERNAL\_STORAGE。
+9. **Snackbar 锚定**：全 app 的 Snackbar 经 `util/Snackbars.kt` 的
+   `Fragment.showSnackbar` 弹出——`Snackbar.make` 默认贴 android.R.id.content
+   底部会盖住底部导航栏，须 `setAnchorView(R.id.bottomNav)` 锚定到导航栏上方；
+   新页面弹提示一律用该扩展，勿直接调 `Snackbar.make`。
 
 ## 参考项目(在上一级文件夹内)
 * `../Android-nRF-Toolbox-4.4.1`:`Nordic Kotlin-BLE-Library`例子,用于参考ble实现
