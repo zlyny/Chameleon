@@ -99,6 +99,19 @@ object ChameleonCommand {
      */
     const val MF1_SET_DETECTION_ENABLE = 4004
 
+    /**
+     * 获取模拟卡认证日志条数（mfkey32 破解用）。请求 DATA 为空；
+     * 响应 DATA：count[4]（大端 U32）；status=SUCCESS。
+     */
+    const val MF1_GET_DETECTION_COUNT = 4005
+
+    /**
+     * 下载模拟卡认证日志。请求 DATA：startIndex[4]（大端 U32）；
+     * 响应 DATA：自该索引起的日志条目（每条 18 字节，见 [com.example.chameleon.device.AuthLog]）；
+     * status=SUCCESS。响应帧 data 上限约 512 字节，调用方需按返回条数推进索引分批下载。
+     */
+    const val MF1_GET_DETECTION_LOG = 4006
+
     /** 命令码转可读名称，用于日志展示 */
     fun nameOf(cmd: Int): String = when (cmd) {
         GET_APP_VERSION -> "GET_APP_VERSION"
@@ -122,6 +135,8 @@ object ChameleonCommand {
         MF1_WRITE_EMU_BLOCK_DATA -> "MF1_WRITE_EMU_BLOCK_DATA"
         HF14A_SET_ANTI_COLL_DATA -> "HF14A_SET_ANTI_COLL_DATA"
         MF1_SET_DETECTION_ENABLE -> "MF1_SET_DETECTION_ENABLE"
+        MF1_GET_DETECTION_COUNT -> "MF1_GET_DETECTION_COUNT"
+        MF1_GET_DETECTION_LOG -> "MF1_GET_DETECTION_LOG"
         else -> "CMD_%d".format(cmd)
     }
 }

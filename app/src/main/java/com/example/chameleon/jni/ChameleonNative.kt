@@ -9,6 +9,7 @@ package com.example.chameleon.jni
  * 当前能力：
  * - Static Nested 攻击求解（Static PRNG 卡，staticnested.c）
  * - Nested 攻击求解（Weak PRNG 卡，nested.c）
+ * - mfkey32 攻击求解与单条记录复核（mfkey32v2.c，模拟卡认证日志离线破解）
  * - 库版本查询（JNI 链路连通性验证）
  *
  * 规划中（对应 MF1_DARKSIDE_ACQUIRE 命令）：
@@ -43,4 +44,25 @@ object ChameleonNative {
      * @return 候选密钥列表（48bit 密钥数值，按命中概率降序）；无可信 NT 组合返回空（可重采）
      */
     external fun nestedRecover(uid: Long, dist: Int, ntPairs: LongArray, parities: ByteArray): LongArray
+
+    /**
+     * mfkey32 攻击求解（模拟卡认证日志离线破解，移植自 mfkey32v2.c）。
+     *
+     * 输入同一 (uid, block, key) 分组内的全部认证记录：记录两两组合求解
+     * （一条恢复候选、一条验证），命中的密钥再对全组记录复核，全部失败的
+     * 视为误报丢弃。
+     *
+     * @param uid 卡片 UID 的无符号 32 位数值
+     * @param nts 每条记录的明文 NT
+     * @param nrs 每条记录的密文 NR（读卡器挑战）
+     * @param ars 每条记录的密文 AR（读卡器应答）
+     * @return 去重后的密钥列表（48bit 密钥数值）；记录不足 2 条返回空
+     */
+    external fun mfkey32Recover(uid: Long, nts: LongArray, nrs: LongArray, ars: LongArray): LongArray
+
+    /**
+     * mfkey32 单条记录复核：验证密钥能否解释该条认证记录
+     * （uid ^ nt 前向走密钥流，比较 ar）。供上层统计"复核通过 n/m 条记录"。
+     */
+    external fun mfkey32Verify(uid: Long, nt: Long, nr: Long, ar: Long, key: Long): Boolean
 }

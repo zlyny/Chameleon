@@ -21,8 +21,28 @@ enum class PrngType(val raw: Int, val label: String) {
     UNKNOWN(-1, "未知"),
     ;
 
+    /**
+     * dump 文件名中的 PRNG 编码段（文件名格式 `<UID>_<SAK>_<ATQA>_<PRNG>.eml`）。
+     * 读卡时检测的 PRNG 随 dump 一起保存，「加载」回读卡页时无需重新检测。
+     */
+    val fileNameCode: Int
+        get() = when (this) {
+            STATIC -> 1
+            WEAK -> 2
+            HARD -> 3
+            UNKNOWN -> 0
+        }
+
     companion object {
         fun of(raw: Int): PrngType = entries.firstOrNull { it.raw == raw } ?: UNKNOWN
+
+        /** 从文件名编码段解析 PRNG（0=未知 1=Static 2=Weak 3=Hard） */
+        fun ofFileNameCode(code: Int): PrngType = when (code) {
+            1 -> STATIC
+            2 -> WEAK
+            3 -> HARD
+            else -> UNKNOWN
+        }
     }
 }
 
@@ -84,13 +104,40 @@ data class TagInfo(
             0x11 -> "MIFARE Classic 4K"
             else -> "未知"
         }
+
+    /** 4 字节 UID 的无符号 32 位数值（mfkey32 等离线求解参数）；非 4 字节 UID 为 0 */
+    val uidValue: Long
+        get() = if (uid.size == 4) {
+            ((uid[0].toLong() and 0xFF) shl 24) or
+                ((uid[1].toLong() and 0xFF) shl 16) or
+                ((uid[2].toLong() and 0xFF) shl 8) or
+                (uid[3].toLong() and 0xFF)
+        } else {
+            0L
+        }
 }
 
 /** 单个扇区单个密钥位的恢复状态 */
-enum class KeyStatus { UNKNOWN, FOUND, MISSING }
+enum class KeyStatus {
+    /** 未检测（初始状态，灰色圆圈） */
+    UNKNOWN,
 
-/** 一个密钥位的完整状态：[status] 为 FOUND 时 [key] 为恢复出的 6 字节密钥 */
+    /** 字典 / Nested / mfkey32 攻击恢复（绿色对号） */
+    FOUND,
+
+    /** 字典攻击未命中（红色叉号，可点击发起 Nested 攻击） */
+    MISSING,
+
+    /** FOUND 基础上经 Dump 全扇区读取成功验证（蓝色对号，密钥确实可访问该扇区） */
+    VERIFIED,
+}
+
+/** 一个密钥位的完整状态：[status] 为 FOUND/VERIFIED 时 [key] 为恢复出的 6 字节密钥 */
 data class KeyState(val status: KeyStatus, val key: ByteArray? = null) {
+    /** 密钥是否已恢复（FOUND 或经 Dump 验证的 VERIFIED，均携带真实密钥） */
+    val isFound: Boolean
+        get() = status == KeyStatus.FOUND || status == KeyStatus.VERIFIED
+
     companion object {
         val UNKNOWN_STATE = KeyState(KeyStatus.UNKNOWN)
     }
@@ -124,3 +171,31 @@ data class NtTriple(val nt: Long, val ntEnc: Long, val par: Int)
 
 /** NT dist 检测结果（Weak PRNG 卡）：UID 数值 + 认证后 PRNG 前进步数 */
 data class NtDist(val uid: Long, val dist: Int)
+
+/**
+ * 模拟卡认证日志条目（MF1_GET_DETECTION_LOG 响应，每条 18 字节）：
+ * `block[1] + bitfield[1] + uid[4] + nt[4] + nr[4] + ar[4]`（多字节大端）。
+ *
+ * 模拟卡开启认证日志（MF1_SET_DETECTION_ENABLE）后，被读卡器认证时固件
+ * 记录认证四元组 (uid, nt, nr, ar)；同块同密钥类型的记录 ≥2 条即可经
+ * mfkey32 离线恢复密钥（见 MainViewModel.mfkey32 与 NDK mfkey32Recover）。
+ */
+data class AuthLog(
+    /** 被认证的块号 */
+    val block: Int,
+    /** bitfield bit0：读卡器使用 KeyB 认证 */
+    val isKeyB: Boolean,
+    /** bitfield bit1：嵌套认证（NT 为密文，不适用 mfkey32 的明文 NT 假设，破解时过滤） */
+    val isNested: Boolean,
+    val uid: Long,
+    /** 卡生成的明文 NT */
+    val nt: Long,
+    /** 读卡器挑战 nr（密文） */
+    val nr: Long,
+    /** 读卡器应答 ar（密文） */
+    val ar: Long,
+) {
+    /** 认证块所在扇区（1K 卡：块号 / 4） */
+    val sector: Int
+        get() = block / ChameleonSession.MF1_BLOCKS_PER_SECTOR
+}

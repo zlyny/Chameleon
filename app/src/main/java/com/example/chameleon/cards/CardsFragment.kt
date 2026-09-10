@@ -28,6 +28,7 @@ import com.example.chameleon.databinding.FragmentCardsBinding
 import com.example.chameleon.device.ChameleonSession
 import com.example.chameleon.device.DumpCard
 import com.example.chameleon.device.DumpContent
+import com.example.chameleon.reader.ReaderPhase
 import com.example.chameleon.util.showSnackbar
 import com.google.android.material.dialog.MaterialAlertDialogBuilder
 import com.google.android.material.snackbar.Snackbar
@@ -38,10 +39,13 @@ import java.util.Locale
 
 /**
  * 卡片管理页：列出 dump 卡片库中的卡片（Reader 页 Dump 自动入库）。
- * 每张卡片四个操作：
+ * 每张卡片五个操作：
  * - 「写入槽」——把整卡数据写入 Chameleon 模拟卡（切换到模拟卡模式，
  *   设置 UID/ATQA/SAK 反碰撞数据后分帧写入 64 块，流程见 MainViewModel）；
  *   进行中全部操作按钮禁用，完成经 Snackbar 提示；
+ * - 「加载」——把卡片元数据（UID/SAK/ATQA/PRNG）与 trailer 中的密钥
+ *   回填到读卡页，无需重新读卡即可继续破解剩余扇区（见
+ *   [MainViewModel.loadDumpToReader]）；
  * - 「查看」——按扇区查看 64 块十六进制数据，trailer 的密钥区与访问
  *   控制位着色区分，未知字节（XX）红色标注，见 [showDumpViewer]；
  * - 「导出」——导出为二进制 .bin 到系统 Download 目录（同名文件自动
@@ -93,6 +97,7 @@ class CardsFragment : Fragment() {
         adapter = DumpCardAdapter(
             subtitleOf = ::cardSubtitle,
             onWrite = ::onWriteClicked,
+            onLoad = ::onLoadClicked,
             onView = ::onViewClicked,
             onExport = ::onExportClicked,
             onDelete = ::onDeleteClicked,
@@ -113,8 +118,8 @@ class CardsFragment : Fragment() {
                     // lastSuccess（写入槽完成提示）由本页消费，互不重复
                     mainViewModel.readerState.collect { state ->
                         adapter.renderPhase(
-                            busy = state.phase != MainViewModel.ReaderPhase.Idle,
-                            writing = state.phase == MainViewModel.ReaderPhase.WritingEmu,
+                            busy = state.phase != ReaderPhase.Idle,
+                            writing = state.phase == ReaderPhase.WritingEmu,
                         )
                         state.lastSuccess?.let {
                             showSnackbar(it, Snackbar.LENGTH_LONG)
@@ -158,6 +163,11 @@ class CardsFragment : Fragment() {
         if (!mainViewModel.writeDumpToEmulator(dump)) {
             showSnackbar(R.string.card_write_start_failed, Snackbar.LENGTH_LONG)
         }
+    }
+
+    /** 加载卡片到读卡页：元数据与 trailer 密钥回填密钥矩阵，完成后切到读卡页继续破解 */
+    private fun onLoadClicked(dump: DumpCard) {
+        mainViewModel.loadDumpToReader(dump)
     }
 
     private fun onViewClicked(dump: DumpCard) {

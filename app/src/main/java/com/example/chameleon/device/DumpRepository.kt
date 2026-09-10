@@ -6,11 +6,13 @@ import java.io.IOException
 
 /** 一张已导出的 dump 卡片（元数据来自文件名，内容存于 .eml 文件） */
 data class DumpCard(
-    /** 文件名（卡片库内唯一标识），形如 UID1E6FE3A6_SAK08_ATQA0400.eml */
+    /** 文件名（卡片库内唯一标识），形如 1E6FE3A6_08_0400_1.eml */
     val fileName: String,
     val uidHex: String,
     val sakHex: String,
     val atqaHex: String,
+    /** 读卡时检测的 PRNG 类型（dump 时随文件名一起保存，「加载」时无需重新检测） */
+    val prng: PrngType,
     val savedAtMillis: Long,
     val sizeBytes: Long,
 )
@@ -26,8 +28,12 @@ data class DumpCard(
  * 文件格式为 MCT / Proxmark / CLI `hf mf eload` 通用的 eml 文本：
  * 每个数据块一行 32 个大写十六进制字符；未读取成功的字节以 XX 记录
  * （见 [DumpContent]，读取时掩码置 false、数值为 0），旧版全 0 行仍
- * 兼容读取（全部视为已知）。文件名 `UID<UID>_SAK<SAK>_ATQA<ATQA>.eml`
- * 即元数据（ATQA 为线上字节序，可逆向解析回原始字节），无需额外索引文件。
+ * 兼容读取（全部视为已知）。
+ *
+ * 文件名 `<UID>_<SAK>_<ATQA>_<PRNG>.eml`（如 `29919F13_08_0400_1.eml`，
+ * 最后一段为 PRNG 编码，见 [PrngType.fileNameCode]）即元数据，无需额外
+ * 索引文件；v4 之前的旧格式 `UID<UID>_SAK<SAK>_ATQA<ATQA>.eml` 仍兼容
+ * 枚举（PRNG 视为未知）。
  *
  * Room 扩展预留（后续版本）：为"标记破解失败 / 读写失败扇区"引入
  * Room 实体（以 [DumpCard.fileName] 为主键，记录每扇区状态与备注），
@@ -49,7 +55,7 @@ class DumpRepository(private val context: Context) {
 
     /** 保存 dump（同名覆盖，即同一张卡重新 dump 时更新），返回卡片条目 */
     fun save(tag: TagInfo, content: DumpContent): DumpCard {
-        val fileName = "UID${tag.uidHex}_SAK${tag.sakHex}_ATQA${tag.atqaHex}$FILE_EXT"
+        val fileName = "${tag.uidHex}_${tag.sakHex}_${tag.atqaHex}_${tag.prng.fileNameCode}$FILE_EXT"
         val file = File(dir, fileName)
         file.writeText(buildEmlContent(content), Charsets.US_ASCII)
         return parseCard(file) ?: throw IOException("生成卡片条目失败")
@@ -100,13 +106,26 @@ class DumpRepository(private val context: Context) {
         }
     }
 
+    /** 解析文件名元数据；新格式含 PRNG 段，v4 前旧格式（无 PRNG）视为未知 */
     private fun parseCard(file: File): DumpCard? {
-        val m = FILE_NAME_PATTERN.matchEntire(file.name) ?: return null
+        NEW_FILE_NAME_PATTERN.matchEntire(file.name)?.let { m ->
+            return DumpCard(
+                fileName = file.name,
+                uidHex = m.groupValues[1],
+                sakHex = m.groupValues[2],
+                atqaHex = m.groupValues[3],
+                prng = PrngType.ofFileNameCode(m.groupValues[4].toInt()),
+                savedAtMillis = file.lastModified(),
+                sizeBytes = file.length(),
+            )
+        }
+        val legacy = LEGACY_FILE_NAME_PATTERN.matchEntire(file.name) ?: return null
         return DumpCard(
             fileName = file.name,
-            uidHex = m.groupValues[1],
-            sakHex = m.groupValues[2],
-            atqaHex = m.groupValues[3],
+            uidHex = legacy.groupValues[1],
+            sakHex = legacy.groupValues[2],
+            atqaHex = legacy.groupValues[3],
+            prng = PrngType.UNKNOWN,
             savedAtMillis = file.lastModified(),
             sizeBytes = file.length(),
         )
@@ -116,8 +135,12 @@ class DumpRepository(private val context: Context) {
         private const val DUMP_DIR = "dumps"
         private const val FILE_EXT = ".eml"
 
-        /** 文件名元数据格式：UID1E6FE3A6_SAK08_ATQA0400.eml */
-        private val FILE_NAME_PATTERN =
+        /** 文件名元数据格式：29919F13_08_0400_1.eml（末段为 PRNG 编码） */
+        private val NEW_FILE_NAME_PATTERN =
+            Regex("([0-9A-F]+)_([0-9A-F]{2})_([0-9A-F]{4})_([0-9])\\.eml")
+
+        /** v4 前的旧格式：UID1E6FE3A6_SAK08_ATQA0400.eml（无 PRNG 段） */
+        private val LEGACY_FILE_NAME_PATTERN =
             Regex("UID([0-9A-F]+)_SAK([0-9A-F]{2})_ATQA([0-9A-F]{4})\\.eml")
     }
 }

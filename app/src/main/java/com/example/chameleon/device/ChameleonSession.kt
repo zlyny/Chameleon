@@ -303,6 +303,44 @@ class ChameleonSession(private val client: ChameleonBleClient) {
     }
 
     /**
+     * 获取模拟卡认证日志条数（mfkey32 破解前置，对齐 CLI `hf mf elog --count`）。
+     *
+     * 请求 DATA 为空；响应 DATA：count[4]（大端 U32）
+     */
+    suspend fun getDetectionCount(): Int {
+        val resp = request(ChameleonCommand.MF1_GET_DETECTION_COUNT)
+        requireStatus(resp, ChameleonStatus.SUCCESS)
+        require(resp.data.size >= 4) { "GET_DETECTION_COUNT 响应数据异常" }
+        return readU32(resp.data, 0).toInt()
+    }
+
+    /**
+     * 自 [startIndex] 起下载认证日志（对齐 CLI `hf mf elog --download`）。
+     *
+     * 请求 DATA：startIndex[4]（大端 U32）；响应 DATA：自该索引起的日志条目，
+     * 每条 18 字节（见 [AuthLog]）。响应帧 data 上限约 512 字节（一次约
+     * 28 条），调用方按返回条数推进索引分批下载，直至取满总数。
+     */
+    suspend fun getDetectionLogs(startIndex: Int): List<AuthLog> {
+        val resp = request(ChameleonCommand.MF1_GET_DETECTION_LOG, u32be(startIndex))
+        requireStatus(resp, ChameleonStatus.SUCCESS)
+        require(resp.data.size % AUTH_LOG_SIZE == 0) { "GET_DETECTION_LOG 响应数据异常" }
+        return (0 until resp.data.size / AUTH_LOG_SIZE).map { i ->
+            val base = i * AUTH_LOG_SIZE
+            val bits = resp.data[base + 1].toInt() and 0xFF
+            AuthLog(
+                block = resp.data[base].toInt() and 0xFF,
+                isKeyB = bits and 0x01 != 0,
+                isNested = bits and 0x02 != 0,
+                uid = readU32(resp.data, base + 2),
+                nt = readU32(resp.data, base + 6),
+                nr = readU32(resp.data, base + 10),
+                ar = readU32(resp.data, base + 14),
+            )
+        }
+    }
+
+    /**
      * 验证单个块的密钥（用于候选密钥筛选）。认证失败不抛异常，返回 false。
      *
      * 请求 DATA：keyType[1]+block[1]+key[6]；status=HF_TAG_OK 即验证通过。
@@ -346,6 +384,14 @@ class ChameleonSession(private val client: ChameleonBleClient) {
     /** 无符号 16 位整数的大端编码（HF14A_RAW 等命令的协议字段） */
     private fun u16be(value: Int): ByteArray =
         byteArrayOf((value shr 8).toByte(), value.toByte())
+
+    /** 无符号 32 位整数的大端编码（MF1_GET_DETECTION_LOG 的索引参数） */
+    private fun u32be(value: Int): ByteArray = byteArrayOf(
+        (value shr 24).toByte(),
+        (value shr 16).toByte(),
+        (value shr 8).toByte(),
+        value.toByte(),
+    )
 
     /** 校验响应状态，非预期时抛出携带可读信息的异常 */
     private fun requireStatus(resp: ChameleonFrame, expected: ChameleonStatus) {
@@ -392,5 +438,8 @@ class ChameleonSession(private val client: ChameleonBleClient) {
 
         /** 单帧最多写入模拟卡块数：帧 data 上限 512 字节，(512-1)/16 = 31 */
         const val MAX_EMU_BLOCKS_PER_REQUEST = 31
+
+        /** 认证日志单条字节数：block[1]+bitfield[1]+uid[4]+nt[4]+nr[4]+ar[4] */
+        const val AUTH_LOG_SIZE = 18
     }
 }

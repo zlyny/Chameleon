@@ -35,7 +35,11 @@ import kotlinx.coroutines.launch
  *    StaticNested、Weak PRNG 卡走 Nested（自动适配）；攻击依赖随机数
  *    碰撞，单次未命中属正常现象，再次点击即可重试；
  * 4. 「Dump」——用已恢复密钥读取全卡数据存入 dump 卡片库（未读取成功的
- *    字节记为 XX，见 DumpContent），卡片管理页可查看 / 写入槽 / 导出 / 删除。
+ *    字节记为 XX，见 DumpContent），卡片管理页可查看 / 写入槽 / 加载 /
+ *    导出 / 删除；某扇区 4 块全部读取成功时，所用密钥位升级为蓝色对号
+ *    （VERIFIED，密钥确实可完整访问该扇区）；
+ * 5. 「mfkey32」——下载模拟卡认证日志离线破解（「写入槽」开启认证日志、
+ *    模拟卡被读卡器认证后），命中密钥回填矩阵，见 MainViewModel.mfkey32。
  */
 class ReaderFragment : Fragment() {
 
@@ -60,6 +64,7 @@ class ReaderFragment : Fragment() {
         super.onViewCreated(view, savedInstanceState)
 
         binding.btnRead.setOnClickListener { viewModel.readCard() }
+        binding.btnMfkey32.setOnClickListener { viewModel.mfkey32() }
         binding.btnRecover.setOnClickListener { viewModel.recoverKeys() }
         binding.btnDump.setOnClickListener { viewModel.dumpCard() }
         buildKeyMatrix()
@@ -81,7 +86,7 @@ class ReaderFragment : Fragment() {
     // 状态渲染
     // ------------------------------------------------------------------
 
-    private fun renderReaderState(state: MainViewModel.ReaderState) {
+    private fun renderReaderState(state: ReaderState) {
         renderTagInfo(state)
         renderKeyMatrix(state.sectors)
         renderDumpLocation(state.dumpLocation)
@@ -94,7 +99,7 @@ class ReaderFragment : Fragment() {
         }
     }
 
-    private fun renderTagInfo(state: MainViewModel.ReaderState) {
+    private fun renderTagInfo(state: ReaderState) {
         val tag = state.tagInfo
         if (tag == null) {
             binding.textUid.text = getString(R.string.tag_value_placeholder)
@@ -139,31 +144,37 @@ class ReaderFragment : Fragment() {
     private fun renderButtons() {
         val connected = viewModel.connectionState.value is MainViewModel.ConnectionState.Connected
         val state = viewModel.readerState.value
-        val idle = state.phase == MainViewModel.ReaderPhase.Idle
+        val idle = state.phase == ReaderPhase.Idle
         val cardReady = state.sectors.isNotEmpty()
-        val hasKey = state.sectors.any {
-            it.keyA.status == KeyStatus.FOUND || it.keyB.status == KeyStatus.FOUND
-        }
+        // FOUND 与 VERIFIED（Dump 验证）均视为有可用密钥
+        val hasKey = state.sectors.any { it.keyA.isFound || it.keyB.isFound }
 
         binding.btnRead.isEnabled = connected && idle
+        binding.btnMfkey32.isEnabled = connected && idle
         binding.btnRecover.isEnabled = connected && idle && cardReady
         binding.btnDump.isEnabled = connected && idle && hasKey
 
         binding.btnRead.setText(
             when (state.phase) {
-                MainViewModel.ReaderPhase.Reading -> R.string.btn_reading
+                ReaderPhase.Reading -> R.string.btn_reading
                 else -> R.string.btn_read
+            },
+        )
+        binding.btnMfkey32.setText(
+            when (state.phase) {
+                ReaderPhase.Mfkey32 -> R.string.btn_mfkey32_running
+                else -> R.string.btn_mfkey32
             },
         )
         binding.btnRecover.setText(
             when (state.phase) {
-                MainViewModel.ReaderPhase.Recovering -> R.string.btn_recovering
+                ReaderPhase.Recovering -> R.string.btn_recovering
                 else -> R.string.btn_recover_keys
             },
         )
         binding.btnDump.setText(
             when (state.phase) {
-                MainViewModel.ReaderPhase.Dumping -> R.string.btn_dumping
+                ReaderPhase.Dumping -> R.string.btn_dumping
                 else -> R.string.btn_dump
             },
         )
@@ -218,7 +229,9 @@ class ReaderFragment : Fragment() {
     private fun cellOf(row: Int, sector: Int): ImageView? =
         keyCells[row * ChameleonSession.MF1_SECTOR_COUNT + sector]
 
+    /** 密钥位图标：蓝勾=VERIFIED（Dump 验证）/ 绿勾=FOUND / 红叉=MISSING / 灰圈=UNKNOWN */
     private fun iconFor(state: KeyState?): Int = when (state?.status) {
+        KeyStatus.VERIFIED -> R.drawable.ic_key_verified
         KeyStatus.FOUND -> R.drawable.ic_key_found
         KeyStatus.MISSING -> R.drawable.ic_key_missing
         else -> R.drawable.ic_key_unknown

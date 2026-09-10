@@ -50,9 +50,10 @@
     <string name="tag_value_placeholder">--</string>
     <string name="tag_ats_none">No</string>
     <string name="reader_keys_title">Keys</string>
-    <string name="reader_keys_hint">绿勾 = 已恢复；点红叉Nested攻击</string>
+    <string name="reader_keys_hint">绿勾=已恢复 蓝勾=Dump验证；点红叉Nested攻击</string>
     <string name="btn_read">Read</string>
     <string name="btn_mfkey32">mfkey32</string>
+    <string name="btn_mfkey32_running">破解中…</string>
     <string name="btn_reading">正在读卡…</string>
     <string name="btn_recover_keys">Recover</string>
     <string name="btn_recovering">正在破解…</string>
@@ -70,7 +71,7 @@
 
     <!-- 卡片管理页 -->
     <string name="cards_title">卡片管理</string>
-    <string name="cards_hint">Dump 出的卡片存于本机卡片库，点「写入槽」加载到 Chameleon 模拟卡，或「导出」为二进制文件到 Download 目录</string>
+    <string name="cards_hint">Dump 出的卡片存于本机卡片库：「写入槽」加载到 Chameleon 模拟卡（mfkey32 采集）、「加载」回读卡页继续破解，或「导出」为二进制文件到 Download 目录</string>
     <string name="cards_empty">卡片库为空\n读卡页 Dump 后的卡片会出现在这里</string>
     <string name="card_item_subtitle">SAK %1$s · ATQA %2$s · %3$d 块 · %4$s</string>
     <string name="btn_card_write">写入槽</string>

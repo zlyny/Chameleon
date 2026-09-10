@@ -80,7 +80,7 @@ class LogFragment : Fragment() {
         }
     }
 
-    private fun renderLog(entries: List<MainViewModel.LogEntry>) {
+    private fun renderLog(entries: List<LogEntry>) {
         if (entries.isEmpty()) {
             binding.textLog.setText(R.string.log_empty)
             return
@@ -103,10 +103,10 @@ class LogFragment : Fragment() {
         binding.scrollLog.post { binding.scrollLog.fullScroll(View.FOCUS_DOWN) }
     }
 
-    private fun MainViewModel.LogKind.colorRes(): Int = when (this) {
-        MainViewModel.LogKind.TX -> R.color.log_tx
-        MainViewModel.LogKind.RX -> R.color.log_rx
-        MainViewModel.LogKind.ERROR -> R.color.log_error
-        MainViewModel.LogKind.INFO -> R.color.log_info
+    private fun LogKind.colorRes(): Int = when (this) {
+        LogKind.TX -> R.color.log_tx
+        LogKind.RX -> R.color.log_rx
+        LogKind.ERROR -> R.color.log_error
+        LogKind.INFO -> R.color.log_info
     }
 }

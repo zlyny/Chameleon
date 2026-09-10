@@ -33,6 +33,54 @@ jlongArray toJavaKeys(JNIEnv* env, const uint64_t* keys, uint32_t keyCount) {
     return result;
 }
 
+// mfkey32 认证四元组：卡生成的明文 NT 与读卡器发来的密文 NR/AR
+struct Mfkey32Rec {
+    uint32_t nt;
+    uint32_t nr;
+    uint32_t ar;
+};
+
+// 复核：密钥能否解释一条认证记录（对齐上位机 crypto1.py 的
+// mfkey32_is_reader_has_key）——用密钥初始化 Crypto1，走一遍
+// 认证密钥流，验证明文 AR 是否等于 NT 的第 64 步后继
+bool keyMatchesRecord(uint32_t uid, const Mfkey32Rec& rec, uint64_t key) {
+    struct Crypto1State s;
+    crypto1_init(&s, key);
+    crypto1_word(&s, uid ^ rec.nt, 0);
+    crypto1_word(&s, rec.nr, 1);
+    return rec.ar == (crypto1_word(&s, 0, 0) ^ prng_successor(rec.nt, 64));
+}
+
+// mfkey32v2 单对求解（移植自 software/src/mfkey32v2.c）：由记录 a 的
+// keystream 恢复候选状态并回滚出密钥，再用记录 b 前向验证。
+// 命中返回 true 并写入 *outKey
+bool mfkey32Pair(uint32_t uid, const Mfkey32Rec& a, const Mfkey32Rec& b, uint64_t* outKey) {
+    const uint32_t p64a = prng_successor(a.nt, 64);
+    const uint32_t p64b = prng_successor(b.nt, 64);
+    struct Crypto1State* s = lfsr_recovery32(a.ar ^ p64a, 0);
+    if (s == nullptr) {
+        return false;
+    }
+    bool found = false;
+    for (struct Crypto1State* t = s; t->odd | t->even; ++t) {
+        // 回滚到认证前的初始状态：ks2(0) -> ks1(nr) -> ks0(uid^nt)
+        lfsr_rollback_word(t, 0, 0);
+        lfsr_rollback_word(t, a.nr, 1);
+        lfsr_rollback_word(t, uid ^ a.nt, 0);
+        crypto1_get_lfsr(t, outKey);
+
+        // 用记录 b 前向验证候选密钥
+        crypto1_word(t, uid ^ b.nt, 0);
+        crypto1_word(t, b.nr, 1);
+        if (b.ar == (crypto1_word(t, 0, 0) ^ p64b)) {
+            found = true;
+            break;
+        }
+    }
+    free(s);
+    return found;
+}
+
 } // namespace
 
 extern "C" JNIEXPORT jstring JNICALL
@@ -199,4 +247,104 @@ Java_com_example_chameleon_jni_ChameleonNative_nestedRecover(
     jlongArray result = toJavaKeys(env, keys, keyCount);
     free(keys);
     return result;
+}
+
+/**
+ * mfkey32 攻击求解（移植自 software/src/mfkey32v2.c，对齐根目录
+ * dump_mf1_elog.py 的破解编排）。
+ *
+ * 输入同一 (uid, block, key) 分组内的全部认证记录（nts/nrs/ars 等长，
+ * 每元素为一条记录的明文 NT / 密文 NR / 密文 AR）：
+ * - 记录两两组合调用 mfkey32v2 算法（记录 a 恢复候选 -> 记录 b 验证）；
+ * - 命中的密钥再对全组记录复核（keyMatchesRecord），全部失败的视为误报丢弃；
+ * - 已被找到的密钥解释的记录对跳过（对齐 py 版 validated 优化，降低组合开销）。
+ *
+ * 返回去重后的密钥列表（48bit 密钥数值）；记录不足 2 条返回空数组。
+ */
+extern "C" JNIEXPORT jlongArray JNICALL
+Java_com_example_chameleon_jni_ChameleonNative_mfkey32Recover(
+        JNIEnv* env,
+        jobject /* this */,
+        jlong uid,
+        jlongArray nts,
+        jlongArray nrs,
+        jlongArray ars) {
+    const jsize n = env->GetArrayLength(nts);
+    if (n < 2 || env->GetArrayLength(nrs) != n || env->GetArrayLength(ars) != n) {
+        return env->NewLongArray(0);
+    }
+
+    // 解包到本地缓冲并立即释放 JNI 引用，之后不再触碰 JNI 内存
+    std::vector<Mfkey32Rec> recs(n);
+    {
+        jlong* pNt = env->GetLongArrayElements(nts, nullptr);
+        jlong* pNr = env->GetLongArrayElements(nrs, nullptr);
+        jlong* pAr = env->GetLongArrayElements(ars, nullptr);
+        for (jsize i = 0; i < n; i++) {
+            recs[i] = {static_cast<uint32_t>(pNt[i]),
+                       static_cast<uint32_t>(pNr[i]),
+                       static_cast<uint32_t>(pAr[i])};
+        }
+        env->ReleaseLongArrayElements(nts, pNt, JNI_ABORT);
+        env->ReleaseLongArrayElements(nrs, pNr, JNI_ABORT);
+        env->ReleaseLongArrayElements(ars, pAr, JNI_ABORT);
+    }
+    const uint32_t u = static_cast<uint32_t>(uid);
+
+    std::vector<uint64_t> foundKeys;
+    std::vector<uint8_t> validated(n, 0);
+    for (jsize i = 0; i < n; i++) {
+        for (jsize j = i + 1; j < n; j++) {
+            // 两条记录均已可被已知密钥解释时跳过该组合（py 版 validated 优化）
+            if (validated[i] && validated[j]) {
+                continue;
+            }
+            uint64_t key = 0;
+            if (!mfkey32Pair(u, recs[i], recs[j], &key)) {
+                continue;
+            }
+            // 全组复核：能解释的记录数 > 0 才采纳，并标记这些记录已解释
+            uint32_t matches = 0;
+            for (jsize k = 0; k < n; k++) {
+                if (keyMatchesRecord(u, recs[k], key)) {
+                    validated[k] = 1;
+                    matches++;
+                }
+            }
+            if (matches == 0) {
+                continue;
+            }
+            bool duplicate = false;
+            for (uint64_t known : foundKeys) {
+                if (known == key) {
+                    duplicate = true;
+                    break;
+                }
+            }
+            if (!duplicate) {
+                foundKeys.push_back(key);
+            }
+        }
+    }
+    return toJavaKeys(env, foundKeys.data(), foundKeys.size());
+}
+
+/**
+ * mfkey32 单条记录复核：验证密钥能否解释该条认证记录
+ * （uid ^ nt 前向走密钥流，比较 ar）。供上层统计"复核通过 n/m 条记录"。
+ */
+extern "C" JNIEXPORT jboolean JNICALL
+Java_com_example_chameleon_jni_ChameleonNative_mfkey32Verify(
+        JNIEnv* /* env */,
+        jobject /* this */,
+        jlong uid,
+        jlong nt,
+        jlong nr,
+        jlong ar,
+        jlong key) {
+    const Mfkey32Rec rec = {static_cast<uint32_t>(nt),
+                            static_cast<uint32_t>(nr),
+                            static_cast<uint32_t>(ar)};
+    return keyMatchesRecord(static_cast<uint32_t>(uid), rec,
+                            static_cast<uint64_t>(key));
 }
