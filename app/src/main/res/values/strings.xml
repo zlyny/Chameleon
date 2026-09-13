@@ -51,6 +51,11 @@
     <string name="tag_ats_none">No</string>
     <string name="reader_keys_title">Keys</string>
     <string name="reader_keys_hint">绿勾=已恢复 蓝勾=Dump验证；点红叉Nested攻击</string>
+    <!-- 密钥矩阵单元格的无障碍描述（原 View 版 ImageView 未设置 contentDescription） -->
+    <string name="key_cell_unknown">密钥未检测</string>
+    <string name="key_cell_found">密钥已恢复</string>
+    <string name="key_cell_verified">密钥已验证（Dump 全扇区读取成功）</string>
+    <string name="key_cell_missing">扇区 %1$d Key%2$s 未恢复，点击发起 Nested 攻击</string>
     <string name="btn_read">Read</string>
     <string name="btn_mfkey32">mfkey32</string>
     <string name="btn_mfkey32_running">破解中…</string>

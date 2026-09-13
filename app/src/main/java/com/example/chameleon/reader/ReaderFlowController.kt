@@ -66,7 +66,7 @@ data class ReaderState( //将读卡数据打包,界面只 collect 一条流,防�
 /**
  * 读卡流程控制器：从 MainViewModel 拆出的读卡 / 破解 / Dump / 写模拟卡 /
  * mfkey32 全部设备业务流程。持有 [ReaderState] 状态流，UI 仍经
- * MainViewModel 的转发属性观察与触发（Fragment 不直接接触本类）。
+ * MainViewModel 的转发属性观察与触发（UI 层不直接接触本类）。
  *
  * 依赖经构造注入：会话提供方（连接生命周期归 MainViewModel）、设备模式
  * 缓存流（ensure*Mode 与主界面模式图标共享同一份）、dump 卡片库、

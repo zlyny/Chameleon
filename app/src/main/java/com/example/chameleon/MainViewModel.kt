@@ -29,7 +29,7 @@ import kotlinx.coroutines.launch
  * 应用级共享 ViewModel：管理 BLE 连接生命周期、设备工作模式缓存与通信
  * 日志；读卡 / 破解 / Dump / 写模拟卡 / mfkey32 流程委托 [readerFlow]
  * （[ReaderFlowController]），UI 仍统一经本类观察与触发。四个页面
- * Fragment 共享同一实例。
+ * 共享同一实例。
  *
  * 线程模型：全部状态流更新与命令收发均运行在主线程调度器上，
  * UI 可直接观察渲染，无需额外线程同步。
