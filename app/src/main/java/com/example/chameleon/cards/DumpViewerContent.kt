@@ -10,9 +10,11 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.selection.SelectionContainer
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
@@ -25,11 +27,37 @@ import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.chameleon.R
 import com.example.chameleon.device.ChameleonSession
-import com.example.chameleon.device.DumpContent
+import com.example.chameleon.data.DumpContent
+import com.example.chameleon.ui.theme.ChameleonTheme
+
+/**
+ * 卡片数据查看对话框（Compose）。
+ *
+ * 用 Compose 自带的 [AlertDialog] 而非 View 的 `MaterialAlertDialogBuilder`：
+ * 对话框窗口缺少 ViewTreeLifecycleOwner / SavedStateRegistryOwner，ComposeView
+ * 在其中无法建立组合（详见 README「开发提醒」第 12 条）。
+ *
+ * Compose 对话框在自己的窗口里按屏幕约束测量，内容区能拿到有界高度，
+ * 因此下面的 [DumpViewerContent] 里 `LazyColumn` 正常工作（无需在 View 侧定高度）。
+ */
+@Composable
+fun DumpViewerDialog(uidHex: String, content: DumpContent, onDismiss: () -> Unit) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text(text = stringResource(R.string.card_view_title, uidHex)) },
+        text = { DumpViewerContent(content) },
+        confirmButton = {
+            TextButton(onClick = onDismiss) {
+                Text(text = stringResource(android.R.string.ok))
+            }
+        },
+    )
+}
 
 /**
  * 卡片数据查看对话框的内容区（Compose 实现）。
@@ -180,3 +208,20 @@ private val DUMP_TEXT_STYLE = TextStyle(
     fontSize = 12.sp,
     lineHeight = 16.sp,
 )
+
+@Preview(showBackground = true)
+@Composable
+private fun DumpViewerContentPreview() {
+    val total = ChameleonSession.MF1_SECTOR_COUNT *
+        ChameleonSession.MF1_BLOCKS_PER_SECTOR *
+        ChameleonSession.MF1_BLOCK_SIZE
+    ChameleonTheme {
+        DumpViewerContent(
+            content = DumpContent(
+                bytes = ByteArray(total) { (it % 256).toByte() },
+                // 每隔几个字节标记未知，用于预览红色 XX 与 trailer 着色
+                known = BooleanArray(total) { it % 7 != 0 },
+            ),
+        )
+    }
+}

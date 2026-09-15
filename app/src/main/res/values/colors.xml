@@ -2,9 +2,7 @@
 <resources>
     <color name="purple_200">#FFBB86FC</color>
     <color name="purple_500">#FF6200EE</color>
-    <color name="purple_700">#FF3700B3</color>
     <color name="teal_200">#FF03DAC5</color>
-    <color name="teal_700">#FF018786</color>
     <color name="black">#FF000000</color>
     <color name="white">#FFFFFFFF</color>
 
@@ -17,9 +15,6 @@
 
     <!-- 密钥状态强调色（PRNG 为 Static 时高亮，提示可静态嵌套攻击） -->
     <color name="key_found">#FF2E7D32</color>
-
-    <!-- 密钥经 Dump 全扇区读取验证（密钥矩阵蓝色对号，Blue 800） -->
-    <color name="key_verified">#FF1565C0</color>
 
     <!-- 卡片查看：trailer 访问控制位着色（琥珀，Amber 800） -->
     <color name="dump_control">#FF8F00</color>

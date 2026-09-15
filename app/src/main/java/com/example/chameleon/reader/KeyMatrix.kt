@@ -19,6 +19,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import com.example.chameleon.R
 import com.example.chameleon.device.ChameleonSession
@@ -26,6 +27,7 @@ import com.example.chameleon.device.KeyState
 import com.example.chameleon.device.KeyStatus
 import com.example.chameleon.device.KeyType
 import com.example.chameleon.device.SectorKeys
+import com.example.chameleon.ui.theme.ChameleonTheme
 
 /**
  * 密钥矩阵（Compose 实现）。
@@ -156,3 +158,24 @@ private val GROUP_GAP = 8.dp
 
 /** 每组矩阵的扇区列数（首列是行标签，故每行 COLUMNS_PER_GROUP + 1 格） */
 private const val COLUMNS_PER_GROUP = ChameleonSession.MF1_SECTOR_COUNT / 2
+
+@Preview(showBackground = true)
+@Composable
+private fun KeyMatrixPreview() {
+    ChameleonTheme {
+        val sectors = List(ChameleonSession.MF1_SECTOR_COUNT) { s ->
+            SectorKeys(
+                sector = s,
+                keyA = KeyState(if (s % 4 == 0) KeyStatus.VERIFIED else KeyStatus.FOUND),
+                keyB = KeyState(
+                    when (s % 3) {
+                        0 -> KeyStatus.FOUND
+                        1 -> KeyStatus.MISSING
+                        else -> KeyStatus.UNKNOWN
+                    },
+                ),
+            )
+        }
+        KeyMatrix(sectors = sectors, onKeyClick = { _, _ -> })
+    }
+}

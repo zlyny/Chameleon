@@ -1,4 +1,6 @@
-package com.example.chameleon.device
+package com.example.chameleon.data
+
+import com.example.chameleon.device.ChameleonSession
 
 /**
  * dump 卡片内容：块数据（[bytes]）+ 每字节"是否已知"掩码（[known]）。

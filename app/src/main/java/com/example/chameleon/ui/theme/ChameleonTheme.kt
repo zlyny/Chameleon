@@ -12,13 +12,13 @@ import androidx.compose.ui.graphics.Color
  * Compose 侧主题：与 XML 主题 `Theme.Chameleon`（parent 为
  * `Theme.Material3.DayNight.NoActionBar`）保持一致。
  *
- * 当前只有部分页面（日志页）用 Compose 渲染，它们与 View 页面同屏共存，
- * 因此这里刻意**不开启动态取色**、并沿用 values/colors.xml 中的主色，
- * 避免同一界面内 Compose 区域与 View 区域配色/深浅模式不一致。
+ * **为什么不直接开启动态取色**：XML 主题并未下线——Manifest 里 Activity 的
+ * 窗口主题仍是 `Theme.Chameleon`（决定窗口背景、状态栏/导航栏配色），
+ * 所以这里沿用 values/colors.xml 中的主色，保证窗口与 Compose 内容观感一致。
  *
- * 日志等内联配色仍经 `colorResource(R.color.log_*)` 读取——它们已在
- * values/colors.xml 与 values-night/colors.xml 中分别定义，跟随
- * 系统深浅模式切换，Compose 与 View 两侧共用同一份色值。
+ * 日志、查看器等内联配色仍经 `colorResource(R.color.*)` 读取——它们已在
+ * values/colors.xml 与 values-night/colors.xml 中分别定义，跟随系统深浅模式
+ * 切换。新增颜色一律走 colors.xml（两套），不要在 Compose 里另写死色值。
  */
 private val Purple200 = Color(0xFFBB86FC)
 private val Purple500 = Color(0xFF6200EE)

@@ -6,9 +6,10 @@ import com.example.chameleon.device.AuthLog
 import com.example.chameleon.device.ChameleonSession
 import com.example.chameleon.device.ChameleonStatusException
 import com.example.chameleon.device.DeviceMode
-import com.example.chameleon.device.DumpCard
-import com.example.chameleon.device.DumpContent
-import com.example.chameleon.device.DumpRepository
+import com.example.chameleon.device.DeviceModeStore
+import com.example.chameleon.data.DumpCard
+import com.example.chameleon.data.DumpContent
+import com.example.chameleon.data.DumpRepository
 import com.example.chameleon.device.KeyDictionary
 import com.example.chameleon.device.KeyState
 import com.example.chameleon.device.KeyStatus
@@ -20,6 +21,7 @@ import com.example.chameleon.jni.ChameleonNative
 import com.example.chameleon.log.LogKind
 import com.example.chameleon.protocol.ChameleonStatus
 import com.example.chameleon.protocol.HexUtils
+import com.example.chameleon.UiMessage
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -53,11 +55,6 @@ data class ReaderState( //将读卡数据打包,界面只 collect 一条流,防�
     val tagInfo: TagInfo? = null,
     /** 每扇区 A/B 密钥恢复结果；非 Mifare 卡或未读卡时为空 */
     val sectors: List<SectorKeys> = emptyList(),
-    /** 最近一次操作的错误提示（UI 用 Snackbar 展示后清除） */
-    val lastError: String? = null,
-
-    /** 最近一次操作的成功提示（UI 用 Snackbar 展示后清除，与 [lastError] 对称） */
-    val lastSuccess: String? = null,
 
     /** 最近一次 dump 的保存位置 */
     val dumpLocation: String? = null,
@@ -68,21 +65,100 @@ data class ReaderState( //将读卡数据打包,界面只 collect 一条流,防�
  * mfkey32 全部设备业务流程。持有 [ReaderState] 状态流，UI 仍经
  * MainViewModel 的转发属性观察与触发（UI 层不直接接触本类）。
  *
- * 依赖经构造注入：会话提供方（连接生命周期归 MainViewModel）、设备模式
- * 缓存流（ensure*Mode 与主界面模式图标共享同一份）、dump 卡片库、
- * 日志回调。协程运行在注入的 scope（viewModelScope，主线程调度器）上，
+ * 依赖经构造注入：会话提供方（连接生命周期归 MainViewModel）、工作模式
+ * 缓存（DeviceModeStore，与主界面模式图标共享同一份）、dump 卡片库、
+ * 日志回调、提示回调（[notify]，与页面级反馈共用同一条 Snackbar 通道）。
+ * 协程运行在注入的 scope（viewModelScope，主线程调度器）上，
  * 状态流更新无需额外线程同步。
+ *
+ * ---------------------------------------------------------------------------
+ * 代码地图（本文件近千行，按下面顺序读不容易迷路）
+ *
+ * 对外入口（每个都遵循同一套骨架，见下方「统一的流程骨架」）：
+ *   readCard()            读卡号 + 测 PRNG + 判定 StaticNested 代次
+ *   recoverKeys()         字典攻击（13 个内置弱密钥）
+ *   recoverKeyByNested()  按 PRNG 分派 StaticNested / Nested 攻击
+ *   dumpCard()            用已恢复密钥读全卡 → 存卡片库
+ *   writeDumpToEmulator() 卡片 → 写入模拟卡槽
+ *   loadDumpToReader()    卡片库 → 回填读卡页矩阵
+ *   mfkey32()             下载认证日志离线破解
+ *
+ * 公共辅助：
+ *   launchExclusive()          ← 流程骨架（守卫 + try/catch/finally），新增流程走它
+ *   pickKnownKey / isKeyMissing / mergeSectorKeys / countFound  ← 密钥矩阵相关
+ *   reuseRecoveredKey()       ← 命中一个密钥后顺带试探其余扇区
+ *   ensureReaderMode / ensureEmulatorMode  ← 设备模式切换（带缓存）
+ *   longToKey()               ← 48bit 数值 ↔ 6 字节密钥
+ *
+ * **统一的流程骨架**：全部流程经 [launchExclusive] 启动，不要照抄手写——
+ * 它依次完成「取 session → 拒绝重入 → 前置校验 → 置 phase → 启动协程」，
+ * 并且 `try/catch/finally` 只在其中写一次（`finally` 复位 phase 漏掉会让
+ * 界面永久停在「进行中」，四个按钮全灰）。
+ *
+ *   ⚠️ 不要在协程外做耗时的事（文件 IO 要切 Dispatchers.IO）。
  */
 class ReaderFlowController(
     private val scope: CoroutineScope,
     private val sessionProvider: () -> ChameleonSession?,
-    private val deviceMode: MutableStateFlow<DeviceMode>,
+    private val deviceModeStore: DeviceModeStore,
     private val dumpRepository: DumpRepository,
     private val appendLog: (LogKind, String) -> Unit,
+    private val notify: (UiMessage) -> Unit,
 ) {
 
     private val _readerState = MutableStateFlow(ReaderState())
     val readerState: StateFlow<ReaderState> = _readerState.asStateFlow()
+
+    // ------------------------------------------------------------------
+    // 流程骨架
+    // ------------------------------------------------------------------
+
+    /**
+     * 启动一个独占流程（同一时刻只允许一个在途流程，设备是串行模型）。
+     *
+     * 依次：取 session（拿不到报 [ReaderError.NotConnected]）→ `phase != Idle`
+     * 时走 [onBusy] 并拒绝 → [precondition] 返回非 null 时报该错误 →
+     * 置 phase → 启动协程，协程内的异常统一走 [handleReaderError]，
+     * **finally 复位 phase 只在这里写一次**。
+     *
+     * @param action 失败时写入日志的前缀，如「读卡失败」
+     * @param block 流程主体；第二个参数是启动瞬间抓取的状态快照（避免主体里
+     *   重复读 `_readerState.value` 又要处理可空性）
+     * @return true 表示已启动（false 为被守卫拦下，原因已上报）
+     */
+    private fun launchExclusive(
+        phase: ReaderPhase,
+        action: String,
+        onBusy: () -> Unit = {},
+        precondition: (ReaderState) -> ReaderError? = { null },
+        block: suspend (session: ChameleonSession, state: ReaderState) -> Unit,
+    ): Boolean {
+        val session = sessionProvider() ?: run {
+            notify(UiMessage.Error(ReaderError.NotConnected))
+            return false
+        }
+        val state = _readerState.value
+        if (state.phase != ReaderPhase.Idle) {
+            onBusy()
+            return false
+        }
+        precondition(state)?.let { error ->
+            notify(UiMessage.Error(error))
+            return false
+        }
+
+        _readerState.update { it.copy(phase = phase) }
+        scope.launch {
+            try {
+                block(session, state)
+            } catch (e: Exception) {
+                handleReaderError(action, e)
+            } finally {
+                _readerState.update { it.copy(phase = ReaderPhase.Idle) }
+            }
+        }
+        return true
+    }
 
     // ------------------------------------------------------------------
     // 读卡
@@ -94,62 +170,47 @@ class ReaderFlowController(
      * 成功后初始化 16 个扇区的密钥状态矩阵。
      */
     fun readCard() {
-        val s = sessionProvider() ?: run {
-            _readerState.update { it.copy(lastError = "设备未连接") }    // it.copy是复制一个新的it,并部分赋值
-            return
-        }
-        if (_readerState.value.phase != ReaderPhase.Idle) return
-        _readerState.update { it.copy(phase = ReaderPhase.Reading, lastError = null) }  //进入 Reading 阶段
-        scope.launch {
-            try {
-                ensureReaderMode(s)
-                var tag = s.scan14a()
-                if (!s.detectMf1Support()) {
-                    _readerState.update { state ->
-                        state.copy(
-                            tagInfo = tag,
-                            sectors = emptyList(),
-                            lastError = "此卡不支持 Mifare Classic，无法恢复密钥",
-                        )
-                    }
-                    appendLog(LogKind.INFO, "读到标签 UID=${tag.uidHex}，但不支持 Mifare Classic")
-                    return@launch   //从协程中退出
+        launchExclusive(ReaderPhase.Reading, "读卡失败") { s, _ ->
+            ensureReaderMode(s)
+            var tag = s.scan14a()
+            if (!s.detectMf1Support()) {
+                _readerState.update { state ->
+                    state.copy(tagInfo = tag, sectors = emptyList())
                 }
-                val prng = try {
-                    s.detectPrng()
-                } catch (e: Exception) {
-                    appendLog(LogKind.INFO, "PRNG 检测失败：${describeError(e)}")
-                    PrngType.UNKNOWN
-                }
-                // Static 卡进一步判定 StaticNested 漏洞代次（GEN1/GEN2），
-                // 仅影响展示与用户预期；检测失败不阻断读卡
-                val staticGen = if (prng == PrngType.STATIC) {
-                    try {
-                        s.detectStaticNestedGen()
-                    } catch (_: Exception) {
-                        null
-                    }
-                } else {
+                notify(UiMessage.Error(ReaderError.MifareNotSupported))
+                appendLog(LogKind.INFO, "读到标签 UID=${tag.uidHex}，但不支持 Mifare Classic")
+                return@launchExclusive
+            }
+            val prng = try {
+                s.detectPrng()
+            } catch (e: Exception) {
+                appendLog(LogKind.INFO, "PRNG 检测失败：${describeError(e)}")
+                PrngType.UNKNOWN
+            }
+            // Static 卡进一步判定 StaticNested 漏洞代次（GEN1/GEN2），
+            // 仅影响展示与用户预期；检测失败不阻断读卡
+            val staticGen = if (prng == PrngType.STATIC) {
+                try {
+                    s.detectStaticNestedGen()
+                } catch (_: Exception) {
                     null
                 }
-                tag = tag.copy(prng = prng, staticGen = staticGen)
-                _readerState.update { state ->
-                    state.copy(
-                        tagInfo = tag,
-                        sectors = List(ChameleonSession.MF1_SECTOR_COUNT) { SectorKeys(it) },
-                        dumpLocation = null,
-                    )
-                }
-                appendLog(
-                    LogKind.INFO,
-                    "读卡成功：UID=${tag.uidHex} SAK=${tag.sakHex} ATQA=${tag.atqaHex} " +
-                        "PRNG=${staticGen?.label ?: prng.label}（${tag.guessedType}）",
-                )
-            } catch (e: Exception) {
-                handleReaderError("读卡失败", e)
-            } finally {
-                _readerState.update { it.copy(phase = ReaderPhase.Idle) }
+            } else {
+                null
             }
+            tag = tag.copy(prng = prng, staticGen = staticGen)
+            _readerState.update { state ->
+                state.copy(
+                    tagInfo = tag,
+                    sectors = List(ChameleonSession.MF1_SECTOR_COUNT) { SectorKeys(it) },
+                    dumpLocation = null,
+                )
+            }
+            appendLog(
+                LogKind.INFO,
+                "读卡成功：UID=${tag.uidHex} SAK=${tag.sakHex} ATQA=${tag.atqaHex} " +
+                    "PRNG=${staticGen?.label ?: prng.label}（${tag.guessedType}）",
+            )
         }
     }
 
@@ -162,37 +223,26 @@ class ReaderFlowController(
      * 已恢复的密钥位跳过（不重复检查），历史结果保留。
      */
     fun recoverKeys() {
-        val s = sessionProvider() ?: run {
-            _readerState.update { it.copy(lastError = "设备未连接") }
-            return
-        }
-        val state = _readerState.value
-        if (state.phase != ReaderPhase.Idle) return
-        if (state.tagInfo == null || state.sectors.isEmpty()) {
-            _readerState.update { it.copy(lastError = "请先读卡") }
-            return
-        }
         val keys = KeyDictionary.keys
-        val before = state.sectors
-        _readerState.update { it.copy(phase = ReaderPhase.Recovering, lastError = null) }
-        scope.launch {
-            try {
-                appendLog(LogKind.INFO, "开始字典破解（字典 ${keys.size} 个密钥）…")
-                val result = s.checkKeysOfSectors(
-                    keys,
-                    shouldCheck = { sector, type -> isKeyMissing(before, sector, type) },
-                )
-                _readerState.update { st -> st.copy(sectors = mergeSectorKeys(st.sectors, result)) }
-                val foundCount = countFound(_readerState.value.sectors)
-                appendLog(
-                    LogKind.INFO,
-                    "字典破解完成：已恢复 $foundCount/${ChameleonSession.MF1_SECTOR_COUNT * 2} 个密钥",
-                )
-            } catch (e: Exception) {
-                handleReaderError("字典破解失败", e)
-            } finally {
-                _readerState.update { it.copy(phase = ReaderPhase.Idle) }
-            }
+        launchExclusive(
+            phase = ReaderPhase.Recovering,
+            action = "字典破解失败",
+            precondition = {
+                if (it.tagInfo == null || it.sectors.isEmpty()) ReaderError.CardNotRead else null
+            },
+        ) { s, state ->
+            val before = state.sectors
+            appendLog(LogKind.INFO, "开始字典破解（字典 ${keys.size} 个密钥）…")
+            val result = s.checkKeysOfSectors(
+                keys,
+                shouldCheck = { sector, type -> isKeyMissing(before, sector, type) },
+            )
+            _readerState.update { st -> st.copy(sectors = mergeSectorKeys(st.sectors, result)) }
+            val foundCount = countFound(_readerState.value.sectors)
+            appendLog(
+                LogKind.INFO,
+                "字典破解完成：已恢复 $foundCount/${ChameleonSession.MF1_SECTOR_COUNT * 2} 个密钥",
+            )
         }
     }
 
@@ -213,122 +263,110 @@ class ReaderFlowController(
      * 现象，提示用户再次点击重试（与 CLI 行为一致）。
      */
     fun recoverKeyByNested(sector: Int, keyType: KeyType) {
-        val s = sessionProvider() ?: run {
-            _readerState.update { it.copy(lastError = "设备未连接") }
-            return
-        }
-        val state = _readerState.value
-        if (state.phase != ReaderPhase.Idle) return
-        val tag = state.tagInfo ?: run {
-            _readerState.update { it.copy(lastError = "请先读卡") }
-            return
-        }
-
-        // PRNG 分派：Static/Weak 分别走对应算法；Hard 需 hardnested（后续版本）
-        when (tag.prng) {
-            PrngType.STATIC, PrngType.WEAK -> Unit
-            PrngType.HARD -> {
-                _readerState.update { it.copy(lastError = "Hard PRNG 卡需使用 hardnested，暂不支持") }
-                return
-            }
-            else -> {
-                _readerState.update { it.copy(lastError = "PRNG 类型未知，请重新读卡") }
-                return
-            }
-        }
-
-        // 已知密钥：优先取目标扇区之外的已恢复密钥（跨扇区嵌套采集更稳），
-        // 仅目标扇区有已知密钥时回落使用（同扇区跨密钥位认证亦可）
-        val known = pickKnownKey(state.sectors, targetSector = sector) ?: run {
-            _readerState.update { it.copy(lastError = "缺少已知密钥：请先用字典攻击恢复至少一个密钥") }
-            return
-        }
-
-        val blockKnown =
-            known.first * ChameleonSession.MF1_BLOCKS_PER_SECTOR + ChameleonSession.MF1_TRAILER_BLOCK_IN_SECTOR
-        val blockTarget =
-            sector * ChameleonSession.MF1_BLOCKS_PER_SECTOR + ChameleonSession.MF1_TRAILER_BLOCK_IN_SECTOR
-        val typeLabel = keyType.name
-
-        _readerState.update { it.copy(phase = ReaderPhase.Recovering, lastError = null) }
-        scope.launch {
-            try {
-                appendLog(LogKind.INFO, "- Nested recover one key running...")
-
-                // 0. KeyB 捷径（先于 Nested 采集）：目标扇区 KeyA 已恢复时，多数卡的
-                //    访问位允许 KeyA 直接读出 trailer 中的 KeyB——读出非全 0 即为
-                //    真实密钥，免去 Nested 采集与求解；读出全 0（访问位限制不可读）
-                //    或读取失败则回落 Nested 攻击
-                if (keyType == KeyType.B) {
-                    val keyAState = state.sectors[sector].keyA
-                    val keyA = keyAState.key
-                    if (keyAState.isFound && keyA != null) {
-                        val keyB = try {
-                            val trailer = s.readBlock(blockTarget, KeyType.A, keyA)
-                            trailer.copyOfRange(
-                                ChameleonSession.MF1_TRAILER_KEY_B_OFFSET,
-                                ChameleonSession.MF1_BLOCK_SIZE,
-                            )
-                        } catch (e: Exception) {
-                            appendLog(LogKind.INFO, " - KeyA 读 trailer 失败（${describeError(e)}），回落 Nested 攻击")
+        launchExclusive(
+            phase = ReaderPhase.Recovering,
+            action = "Nested 攻击失败",
+            precondition = { state ->
+                when (state.tagInfo?.prng) {
+                    null -> ReaderError.CardNotRead
+                    // Static/Weak 分别走对应算法；Hard 需 hardnested（后续版本）
+                    PrngType.STATIC, PrngType.WEAK -> {
+                        // 已知密钥：优先取目标扇区之外的已恢复密钥（跨扇区嵌套采集更稳），
+                        // 仅目标扇区有已知密钥时回落使用（同扇区跨密钥位认证亦可）
+                        if (pickKnownKey(state.sectors, targetSector = sector) == null) {
+                            ReaderError.NoKnownKey
+                        } else {
                             null
                         }
-                        if (keyB != null) {
-                            if (keyB.all { it == 0.toByte() }) {
-                                appendLog(LogKind.INFO, " - KeyB 经 KeyA 读出为全 0（访问位限制不可读），回落 Nested 攻击")
-                            } else {
-                                appendLog(
-                                    LogKind.INFO,
-                                    " - Block %d Type %s Key Found: %s".format(
-                                        blockTarget,
-                                        typeLabel,
-                                        keyB.joinToString("") { "%02X".format(it) },
-                                    ),
-                                )
-                                applyFoundKey(s, sector, keyType, keyB)
-                                return@launch
-                            }
+                    }
+                    PrngType.HARD -> ReaderError.HardPrngUnsupported
+                    else -> ReaderError.PrngUnknown
+                }
+            },
+        ) { s, state ->
+            // 前置条件已在上面校验过，这里取到的必然非空（用早返回避免 !!）
+            val tag = state.tagInfo ?: return@launchExclusive
+            val known = pickKnownKey(state.sectors, targetSector = sector) ?: return@launchExclusive
+
+            val blockKnown =
+                known.first * ChameleonSession.MF1_BLOCKS_PER_SECTOR +
+                    ChameleonSession.MF1_TRAILER_BLOCK_IN_SECTOR
+            val blockTarget =
+                sector * ChameleonSession.MF1_BLOCKS_PER_SECTOR +
+                    ChameleonSession.MF1_TRAILER_BLOCK_IN_SECTOR
+            val typeLabel = keyType.name
+
+            appendLog(LogKind.INFO, "- Nested recover one key running...")
+
+            // 0. KeyB 捷径（先于 Nested 采集）：目标扇区 KeyA 已恢复时，多数卡的
+            //    访问位允许 KeyA 直接读出 trailer 中的 KeyB——读出非全 0 即为
+            //    真实密钥，免去 Nested 采集与求解；读出全 0（访问位限制不可读）
+            //    或读取失败则回落 Nested 攻击
+            if (keyType == KeyType.B) {
+                val keyAState = state.sectors[sector].keyA
+                val keyA = keyAState.key
+                if (keyAState.isFound && keyA != null) {
+                    val keyB = try {
+                        val trailer = s.readBlock(blockTarget, KeyType.A, keyA)
+                        trailer.copyOfRange(
+                            ChameleonSession.MF1_TRAILER_KEY_B_OFFSET,
+                            ChameleonSession.MF1_BLOCK_SIZE,
+                        )
+                    } catch (e: Exception) {
+                        appendLog(LogKind.INFO, " - KeyA 读 trailer 失败（${describeError(e)}），回落 Nested 攻击")
+                        null
+                    }
+                    if (keyB != null) {
+                        if (keyB.all { it == 0.toByte() }) {
+                            appendLog(LogKind.INFO, " - KeyB 经 KeyA 读出为全 0（访问位限制不可读），回落 Nested 攻击")
+                        } else {
+                            appendLog(
+                                LogKind.INFO,
+                                " - Block %d Type %s Key Found: %s".format(
+                                    blockTarget,
+                                    typeLabel,
+                                    keyB.joinToString("") { "%02X".format(it) },
+                                ),
+                            )
+                            applyFoundKey(s, sector, keyType, keyB)
+                            return@launchExclusive
                         }
                     }
                 }
-
-                // 1. 采集参数 + NDK 求解（按 PRNG 类型分派，日志对齐 CLI）
-                val candidates = if (tag.prng == PrngType.STATIC) {
-                    solveStaticNested(s, blockKnown, known, blockTarget, keyType)
-                } else {
-                    solveWeakNested(s, blockKnown, known, blockTarget, keyType)
-                }
-
-                if (candidates.isEmpty()) {
-                    appendLog(LogKind.ERROR, " - 无候选密钥：采集数据未命中（Nested 成功率有限），可再次点击重试")
-                    _readerState.update { it.copy(lastError = "本次未找到密钥（属正常现象），可再次点击红叉重试") }
-                    return@launch
-                }
-                appendLog(LogKind.INFO, " - [${candidates.size} candidate key(s) found ]")
-
-                // 2. 逐候选验证，命中即写入密钥矩阵
-                for (candidate in candidates) {
-                    val key = longToKey(candidate)
-                    if (s.authOneKeyBlock(blockTarget, keyType, key)) {
-                        appendLog(
-                            LogKind.INFO,
-                            " - Block %d Type %s Key Found: %s".format(
-                                blockTarget,
-                                typeLabel,
-                                key.joinToString("") { "%02X".format(it) },
-                            ),
-                        )
-                        applyFoundKey(s, sector, keyType, key)
-                        return@launch
-                    }
-                }
-                appendLog(LogKind.ERROR, " - 候选密钥全部验证失败，可再次点击重试")
-                _readerState.update { it.copy(lastError = "候选密钥验证未通过（属正常现象），可再次点击红叉重试") }
-            } catch (e: Exception) {
-                handleReaderError("Nested 攻击失败", e)
-            } finally {
-                _readerState.update { it.copy(phase = ReaderPhase.Idle) }
             }
+
+            // 1. 采集参数 + NDK 求解（按 PRNG 类型分派，日志对齐 CLI）
+            val candidates = if (tag.prng == PrngType.STATIC) {
+                solveStaticNested(s, blockKnown, known, blockTarget, keyType)
+            } else {
+                solveWeakNested(s, blockKnown, known, blockTarget, keyType)
+            }
+
+            if (candidates.isEmpty()) {
+                appendLog(LogKind.ERROR, " - 无候选密钥：采集数据未命中（Nested 成功率有限），可再次点击重试")
+                notify(UiMessage.Error(ReaderError.NestedMiss))
+                return@launchExclusive
+            }
+            appendLog(LogKind.INFO, " - [${candidates.size} candidate key(s) found ]")
+
+            // 2. 逐候选验证，命中即写入密钥矩阵
+            for (candidate in candidates) {
+                val key = longToKey(candidate)
+                if (s.authOneKeyBlock(blockTarget, keyType, key)) {
+                    appendLog(
+                        LogKind.INFO,
+                        " - Block %d Type %s Key Found: %s".format(
+                            blockTarget,
+                            typeLabel,
+                            key.joinToString("") { "%02X".format(it) },
+                        ),
+                    )
+                    applyFoundKey(s, sector, keyType, key)
+                    return@launchExclusive
+                }
+            }
+            appendLog(LogKind.ERROR, " - 候选密钥全部验证失败，可再次点击重试")
+            notify(UiMessage.Error(ReaderError.NestedVerifyFailed))
         }
     }
 
@@ -350,6 +388,32 @@ class ReaderFlowController(
             reuseRecoveredKey(s, key)
         } catch (e: Exception) {
             appendLog(LogKind.INFO, " - 密钥复用检查失败：${describeError(e)}")
+        }
+    }
+
+    /**
+     * 把某扇区实际用于读取的密钥位升级为 VERIFIED（矩阵由绿勾换蓝色对号）：
+     * 该密钥确实能完整访问该扇区，dump 出的数据完整可信。
+     *
+     * 只标**实际完成读取的那一位**（dump 用的是 A 就只升级 A），不连带另一位。
+     */
+    private fun markKeyVerified(sector: Int, keyType: KeyType) {
+        _readerState.update { st ->
+            st.copy(sectors = st.sectors.mapIndexed { i, sk ->
+                if (i != sector) sk
+                else sk.copy(
+                    keyA = if (keyType == KeyType.A && sk.keyA.isFound) {
+                        sk.keyA.copy(status = KeyStatus.VERIFIED)
+                    } else {
+                        sk.keyA
+                    },
+                    keyB = if (keyType == KeyType.B && sk.keyB.isFound) {
+                        sk.keyB.copy(status = KeyStatus.VERIFIED)
+                    } else {
+                        sk.keyB
+                    },
+                )
+            })
         }
     }
 
@@ -376,7 +440,7 @@ class ReaderFlowController(
      * 模拟卡模式时跳过，用户切回读卡器模式并放回原卡后可点「Recover」复查。
      */
     private suspend fun reuseRecoveredKey(s: ChameleonSession, key: ByteArray) {
-        if (deviceMode.value != DeviceMode.READER) {
+        if (deviceModeStore.mode.value != DeviceMode.READER) {
             appendLog(LogKind.INFO, " - 跳过密钥复用检查（设备非读卡器模式；放回原卡后可点 Recover 复查）")
             return
         }
@@ -534,27 +598,24 @@ class ReaderFlowController(
      *   读出值，但读出全零视为读取失败（真实卡的访问控制位不会全零），
      *   同样标记未知。
      *
-     * 某扇区 4 块全部读取成功时，所用密钥位升级为 VERIFIED（密钥矩阵显示
-     * 蓝色对号）：该密钥确实能完整访问该扇区，dump 出的数据完整可信。
+     * 某扇区 4 块全部读取成功时，所用密钥位**立刻**升级为 VERIFIED（密钥矩阵
+     * 由绿勾换蓝色对号）——不必等整卡跑完，因此 dump 过程中矩阵本身就是进度条。
+     * 含义：该密钥确实能完整访问该扇区，dump 出的数据完整可信。
      */
     fun dumpCard() {
-        val s = sessionProvider() ?: run {
-            _readerState.update { it.copy(lastError = "设备未连接") }
-            return
-        }
-        val state = _readerState.value
-        if (state.phase != ReaderPhase.Idle) return
-        val tag = state.tagInfo ?: run {
-            _readerState.update { it.copy(lastError = "请先读卡") }
-            return
-        }
-        if (state.sectors.none { it.keyA.isFound || it.keyB.isFound }) {
-            _readerState.update { it.copy(lastError = "没有可用密钥，请先恢复密钥") }
-            return
-        }
-        _readerState.update { it.copy(phase = ReaderPhase.Dumping, lastError = null) }
-        scope.launch {
-            try {
+        launchExclusive(
+            phase = ReaderPhase.Dumping,
+            action = "Dump 失败",
+            precondition = {
+                when {
+                    it.tagInfo == null -> ReaderError.CardNotRead
+                    it.sectors.none { sk -> sk.keyA.isFound || sk.keyB.isFound } -> ReaderError.NoKnownKey
+                    else -> null
+                }
+            },
+            block = { s, state ->
+                val tag = state.tagInfo ?: return@launchExclusive
+
                 // 初始全部未知（XX）：只有成功读出或回填的字节才标记已知
                 val content = DumpContent.allUnknown(
                     ChameleonSession.MF1_SECTOR_COUNT *
@@ -564,10 +625,6 @@ class ReaderFlowController(
                 val bytes = content.bytes
                 val known = content.known
                 var failedBlocks = 0
-                // 每扇区成功读取的块数：满 4 块即视为"全扇区读取成功"（VERIFIED 依据）
-                val readOkPerSector = IntArray(ChameleonSession.MF1_SECTOR_COUNT)
-                // 每扇区实际使用的密钥类型：升级 VERIFIED 时只标实际完成读取的位
-                val usedTypePerSector = arrayOfNulls<KeyType>(ChameleonSession.MF1_SECTOR_COUNT)
                 for (sector in 0 until ChameleonSession.MF1_SECTOR_COUNT) {
                     val sectorKeys = state.sectors[sector]
                     // 优先 KeyA（KeyA 命中时固件通常已顺带恢复 KeyB）
@@ -575,7 +632,7 @@ class ReaderFlowController(
                     val key = (if (useKeyA) sectorKeys.keyA else sectorKeys.keyB).key
                     if (key == null) continue // 未破解扇区：整扇区保持未知（XX）
                     val keyType = if (useKeyA) KeyType.A else KeyType.B
-                    usedTypePerSector[sector] = keyType
+                    var readOk = 0
                     for (i in 0 until ChameleonSession.MF1_BLOCKS_PER_SECTOR) {
                         val block = sector * ChameleonSession.MF1_BLOCKS_PER_SECTOR + i
                         try {
@@ -588,13 +645,18 @@ class ReaderFlowController(
                                 blockOffset + ChameleonSession.MF1_BLOCK_SIZE,
                                 true,
                             )
-                            readOkPerSector[sector]++
+                            readOk++
                         } catch (e: ChameleonStatusException) {
                             // 卡片离开：中断整个 dump；其余（如访问位限制）仅记块失败
                             if (e.status == ChameleonStatus.HF_TAG_NO.raw) throw e
                             failedBlocks++
                             appendLog(LogKind.ERROR, "块 $block 读取失败：${e.statusDescription}")
                         }
+                    }
+                    // 4/4 块全部读成功 → 立刻把所用密钥位升级 VERIFIED（矩阵换蓝色对号），
+                    // 不必等整卡跑完：dump 期间可据此实时看到进度
+                    if (readOk == ChameleonSession.MF1_BLOCKS_PER_SECTOR) {
+                        markKeyVerified(sector, keyType)
                     }
                 }
                 // trailer 块的 KeyA 对读卡器永远返回全 0，KeyB 在常规访问位配置下
@@ -636,20 +698,8 @@ class ReaderFlowController(
                     }
                 }
 
-                // 全扇区读取成功（4/4 块）的密钥位升级 VERIFIED：矩阵换蓝色对号，
-                // 直观区分"已恢复但未经全量验证"与"dump 数据完整可信"
-                _readerState.update { st ->
-                    st.copy(sectors = st.sectors.mapIndexed { sector, sk ->
-                        val used = usedTypePerSector[sector] ?: return@mapIndexed sk
-                        if (readOkPerSector[sector] != ChameleonSession.MF1_BLOCKS_PER_SECTOR) sk
-                        else sk.copy(
-                            keyA = if (used == KeyType.A && sk.keyA.isFound) sk.keyA.copy(status = KeyStatus.VERIFIED) else sk.keyA,
-                            keyB = if (used == KeyType.B && sk.keyB.isFound) sk.keyB.copy(status = KeyStatus.VERIFIED) else sk.keyB,
-                        )
-                    })
-                }
-
-                val saved = dumpRepository.save(tag, content)
+                // 卡片库文件写入属 IO，切到 IO 线程避免在 UI 线程做磁盘访问
+                val saved = withContext(Dispatchers.IO) { dumpRepository.save(tag, content) }
                 _readerState.update { it.copy(dumpLocation = saved.fileName) }
                 appendLog(
                     LogKind.INFO,
@@ -659,22 +709,8 @@ class ReaderFlowController(
                         "Dump 已存入卡片库：${saved.fileName}（${failedBlocks} 个块读取失败，标记为 XX）"
                     },
                 )
-            } catch (e: Exception) {
-                handleReaderError("Dump 失败", e)
-            } finally {
-                _readerState.update { it.copy(phase = ReaderPhase.Idle) }
-            }
-        }
-    }
-
-    /** 清除最近一次错误提示（UI 展示 Snackbar 后回调） */
-    fun consumeLastError() {
-        _readerState.update { it.copy(lastError = null) }
-    }
-
-    /** 清除最近一次成功提示（UI 展示 Snackbar 后回调） */
-    fun consumeLastSuccess() {
-        _readerState.update { it.copy(lastSuccess = null) }
+            },
+        )
     }
 
     /**
@@ -683,43 +719,39 @@ class ReaderFlowController(
      * 2. 设置反碰撞数据（UID/ATQA/SAK 与原卡一致）；
      * 3. 分块写入全部块数据（单帧上限 31 块，1K 卡 4 帧完成）。
      *
-     * 写入当前激活卡槽；完成后设备立即模拟这张卡，成功经 lastSuccess
-     * 通知 UI 弹出 Snackbar。未知字节（XX，见 [DumpContent]）按 0x00
-     * 写入设备。
+     * 写入当前激活卡槽；完成后设备立即模拟这张卡，成功提示经 [notify] 弹出
+     * Snackbar。未知字节（XX，见 [DumpContent]）按 0x00 写入设备。
      *
-     * @return false 表示未启动（未连接 / 设备忙 / 数据异常），原因见日志与 lastError
+     * 未启动的各种原因（未连接 / 设备忙 / 元数据非法）都会经 [notify] 上报具体
+     * 文案，调用方无需再补一条提示。
      */
-    fun writeDumpToEmulator(dump: DumpCard): Boolean {
-        val s = sessionProvider() ?: run {
-            _readerState.update { it.copy(lastError = "设备未连接") }
-            return false
-        }
-        if (_readerState.value.phase != ReaderPhase.Idle) {
-            _readerState.update { it.copy(lastError = "设备忙（读卡或写入进行中），请稍后再试") }
-            return false
-        }
-        val content = dumpRepository.read(dump.fileName) ?: run {
-            _readerState.update { it.copy(lastError = "读取 dump 文件失败") }
-            return false
-        }
-        if (content.bytes.size != ChameleonSession.MF1_SECTOR_COUNT *
-            ChameleonSession.MF1_BLOCKS_PER_SECTOR * ChameleonSession.MF1_BLOCK_SIZE
-        ) {
-            _readerState.update { it.copy(lastError = "dump 数据非 1K 卡（64 块），暂不支持") }
-            return false
-        }
-
+    fun writeDumpToEmulator(dump: DumpCard) {
+        // 元数据解析放在启动流程**之前**：非法时直接返回，不占用 phase
+        // （放在协程里的话按钮会先闪一下「写入中…」再复位）
         val uid = HexUtils.parse(dump.uidHex)
         val atqa = HexUtils.parse(dump.atqaHex)
         val sak = HexUtils.parse(dump.sakHex)
         if (uid == null || atqa == null || sak == null) {
-            _readerState.update { it.copy(lastError = "dump 元数据解析失败") }
-            return false
+            notify(UiMessage.Error(ReaderError.DumpMetaInvalid))
+            return
         }
-
-        _readerState.update { it.copy(phase = ReaderPhase.WritingEmu, lastError = null) }
-        scope.launch {
-            try {
+        launchExclusive(
+            phase = ReaderPhase.WritingEmu,
+            action = "写入模拟卡失败",
+            onBusy = { notify(UiMessage.Error(ReaderError.DeviceBusy)) },
+            block = { s, _ ->
+                // 卡片库文件读取属 IO，切到 IO 线程（原本在 UI 线程同步读）
+                val content = withContext(Dispatchers.IO) { dumpRepository.read(dump.fileName) }
+                if (content == null) {
+                    notify(UiMessage.Error(ReaderError.DumpReadFailed))
+                    return@launchExclusive
+                }
+                if (content.bytes.size != ChameleonSession.MF1_SECTOR_COUNT *
+                    ChameleonSession.MF1_BLOCKS_PER_SECTOR * ChameleonSession.MF1_BLOCK_SIZE
+                ) {
+                    notify(UiMessage.Error(ReaderError.DumpNot1K))
+                    return@launchExclusive
+                }
                 appendLog(LogKind.INFO, "写入模拟卡：UID=${dump.uidHex}（${content.blockCount} 块）")
                 ensureEmulatorMode(s)
 
@@ -744,14 +776,9 @@ class ReaderFlowController(
                     appendLog(LogKind.INFO, " - 已写入块 $block")
                 }
                 appendLog(LogKind.INFO, "写入完成，设备正在模拟该卡")
-                _readerState.update { it.copy(lastSuccess = "已写入模拟卡：UID=${dump.uidHex}，设备正在模拟该卡") }
-            } catch (e: Exception) {
-                handleReaderError("写入模拟卡失败", e)
-            } finally {
-                _readerState.update { it.copy(phase = ReaderPhase.Idle) }
-            }
-        }
-        return true
+                notify(UiMessage.Text("已写入模拟卡：UID=${dump.uidHex}，设备正在模拟该卡"))
+            },
+        )
     }
 
     /**
@@ -763,21 +790,35 @@ class ReaderFlowController(
      */
     fun loadDumpToReader(dump: DumpCard) {
         if (_readerState.value.phase != ReaderPhase.Idle) {
-            _readerState.update { it.copy(lastError = "设备忙，请稍后再试") }
-            return
-        }
-        val content = dumpRepository.read(dump.fileName) ?: run {
-            _readerState.update { it.copy(lastError = "读取 dump 文件失败") }
+            notify(UiMessage.Error(ReaderError.DeviceBusy))
             return
         }
         val uid = HexUtils.parse(dump.uidHex)
         val atqa = HexUtils.parse(dump.atqaHex)
         val sak = HexUtils.parse(dump.sakHex)?.firstOrNull()?.toInt()
         if (uid == null || atqa == null || sak == null) {
-            _readerState.update { it.copy(lastError = "dump 元数据解析失败") }
+            notify(UiMessage.Error(ReaderError.DumpMetaInvalid))
             return
         }
+        // 卡片库文件读取属 IO，放到协程里切 IO 线程执行（原本在 UI 线程同步读）
+        scope.launch {
+            val content = withContext(Dispatchers.IO) { dumpRepository.read(dump.fileName) }
+            if (content == null) {
+                notify(UiMessage.Error(ReaderError.DumpReadFailed))
+                return@launch
+            }
+            applyLoadedDump(dump, uid, atqa, sak, content)
+        }
+    }
 
+    /** [loadDumpToReader] 的落地部分：trailer 密钥回填密钥矩阵并更新状态 */
+    private fun applyLoadedDump(
+        dump: DumpCard,
+        uid: ByteArray,
+        atqa: ByteArray,
+        sak: Int,
+        content: DumpContent,
+    ) {
         // 密钥矩阵回填：逐扇区解析 trailer 的 KeyA/KeyB 区段
         val sectors = List(ChameleonSession.MF1_SECTOR_COUNT) { sector ->
             val trailerOffset = (sector * ChameleonSession.MF1_BLOCKS_PER_SECTOR +
@@ -801,14 +842,12 @@ class ReaderFlowController(
         }
         val foundCount = countFound(sectors)
         val tag = TagInfo(uid = uid, atqa = atqa, sak = sak, ats = byteArrayOf(), prng = dump.prng)
-        _readerState.update {
-            it.copy(tagInfo = tag, sectors = sectors, lastError = null)
-        }
+        _readerState.update { it.copy(tagInfo = tag, sectors = sectors) }
         appendLog(
             LogKind.INFO,
             "已加载卡片 ${dump.fileName}：UID=${dump.uidHex} PRNG=${dump.prng.label}，回填 $foundCount 个密钥位",
         )
-        _readerState.update { it.copy(lastSuccess = "已加载 ${dump.uidHex}（回填 $foundCount 个密钥位），可继续破解剩余扇区") }
+        notify(UiMessage.Text("已加载 ${dump.uidHex}（回填 $foundCount 个密钥位），可继续破解剩余扇区"))
     }
 
     // ------------------------------------------------------------------
@@ -827,20 +866,16 @@ class ReaderFlowController(
      * mfkey32 的明文 NT 假设，破解时过滤。
      */
     fun mfkey32() {
-        val s = sessionProvider() ?: run {
-            _readerState.update { it.copy(lastError = "设备未连接") }
-            return
-        }
-        if (_readerState.value.phase != ReaderPhase.Idle) return
-        _readerState.update { it.copy(phase = ReaderPhase.Mfkey32, lastError = null) }
-        scope.launch {
-            try {
+        launchExclusive(
+            phase = ReaderPhase.Mfkey32,
+            action = "mfkey32 破解失败",
+            block = { s, _ ->
                 // 1. 下载全部认证日志（单帧约 28 条，按返回条数推进索引）
                 val count = s.getDetectionCount()
                 appendLog(LogKind.INFO, "检测日志数量: $count")
                 if (count == 0) {
-                    _readerState.update { it.copy(lastError = "无认证日志：请先用「写入槽」模拟该卡并让读卡器认证") }
-                    return@launch
+                    notify(UiMessage.Error(ReaderError.NoAuthLog))
+                    return@launchExclusive
                 }
                 val logs = mutableListOf<AuthLog>()
                 while (logs.size < count) {
@@ -857,8 +892,8 @@ class ReaderFlowController(
                 val tagUid = _readerState.value.tagInfo?.uidValue ?: 0L
                 val usable = if (tagUid != 0L) logs.filter { it.uid == tagUid } else logs
                 if (usable.isEmpty()) {
-                    _readerState.update { it.copy(lastError = "认证日志与当前卡片 UID 不符") }
-                    return@launch
+                    notify(UiMessage.Error(ReaderError.AuthLogUidMismatch))
+                    return@launchExclusive
                 }
 
                 // 3. 认证记录明细（列格式对齐 python 脚本输出）
@@ -919,8 +954,12 @@ class ReaderFlowController(
                     for (keyValue in keys) {
                         val key = longToKey(keyValue)
                         val keyHex = key.joinToString("") { "%02X".format(it) }
-                        val matches = recs.count {
-                            ChameleonNative.mfkey32Verify(uid, it.nt, it.nr, it.ar, keyValue)
+                        // mfkey32Verify 是 native Crypto1 计算，逐条复核必须离开 UI 线程
+                        // （与 solveWithTiming 同理，只是这里按命中密钥循环调用）
+                        val matches = withContext(Dispatchers.Default) {
+                            recs.count {
+                                ChameleonNative.mfkey32Verify(uid, it.nt, it.nr, it.ar, keyValue)
+                            }
                         }
                         appendLog(LogKind.INFO, "  > 找到密钥: $keyHex (复核通过 $matches/${recs.size} 条记录)")
                         resultLines.add("uid=%08X block=%d key=%s => $keyHex".format(uid, block, keyLabel))
@@ -933,20 +972,14 @@ class ReaderFlowController(
 
                 // 5. 结果汇总（对齐 python 脚本第三段输出）
                 if (resultLines.isEmpty()) {
-                    _readerState.update {
-                        it.copy(lastError = "mfkey32 未找到密钥（同组至少 2 条认证记录，可让读卡器多认证几次后重试）")
-                    }
+                    notify(UiMessage.Error(ReaderError.Mfkey32NoKey))
                 } else {
                     appendLog(LogKind.INFO, "========== 结果 ==========")
                     resultLines.forEach { appendLog(LogKind.INFO, it) }
-                    _readerState.update { it.copy(lastSuccess = "mfkey32 恢复 ${resultLines.size} 个密钥") }
+                    notify(UiMessage.Text("mfkey32 恢复 ${resultLines.size} 个密钥"))
                 }
-            } catch (e: Exception) {
-                handleReaderError("mfkey32 破解失败", e)
-            } finally {
-                _readerState.update { it.copy(phase = ReaderPhase.Idle) }
-            }
-        }
+            },
+        )
     }
 
     // ------------------------------------------------------------------
@@ -960,7 +993,7 @@ class ReaderFlowController(
 
     /** 确保设备处于读卡器模式；依据缓存的工作模式避免多余的查询/切换 */
     private suspend fun ensureReaderMode(s: ChameleonSession) {
-        when (deviceMode.value) {
+        when (deviceModeStore.mode.value) {
             DeviceMode.READER -> return
 
             DeviceMode.EMULATOR -> {
@@ -971,20 +1004,20 @@ class ReaderFlowController(
             DeviceMode.UNKNOWN -> {
                 val mode = s.getDeviceMode()
                 if (mode == DeviceMode.READER) {
-                    deviceMode.value = mode
+                    deviceModeStore.update(mode)
                     return
                 }
                 appendLog(LogKind.INFO, "设备处于模拟卡模式，切换为读卡器模式…")
                 s.changeDeviceMode(DeviceMode.READER)
             }
         }
-        deviceMode.value = DeviceMode.READER
+        deviceModeStore.update(DeviceMode.READER)
         appendLog(LogKind.INFO, "已切换为读卡器模式")
     }
 
     /** 确保设备处于模拟卡模式（写入 dump 前调用）；与 [ensureReaderMode] 对称 */
     private suspend fun ensureEmulatorMode(s: ChameleonSession) {
-        when (deviceMode.value) {
+        when (deviceModeStore.mode.value) {
             DeviceMode.EMULATOR -> return
 
             DeviceMode.READER -> {
@@ -995,24 +1028,31 @@ class ReaderFlowController(
             DeviceMode.UNKNOWN -> {
                 val mode = s.getDeviceMode()
                 if (mode == DeviceMode.EMULATOR) {
-                    deviceMode.value = mode
+                    deviceModeStore.update(mode)
                     return
                 }
                 appendLog(LogKind.INFO, "切换为模拟卡模式…")
                 s.changeDeviceMode(DeviceMode.EMULATOR)
             }
         }
-        deviceMode.value = DeviceMode.EMULATOR
+        deviceModeStore.update(DeviceMode.EMULATOR)
         appendLog(LogKind.INFO, "已切换为模拟卡模式")
     }
 
+    /** 操作失败：日志记全量，UI 侧只拿到结构化错误（[ReaderError.OperationFailed]） */
     private suspend fun handleReaderError(action: String, e: Exception) {
-        val message = "$action：${describeError(e)}"
-        appendLog(LogKind.ERROR, message)
-        _readerState.update { it.copy(lastError = message) }
+        val detail = describeError(e)
+        appendLog(LogKind.ERROR, "$action：$detail")
+        notify(UiMessage.Error(ReaderError.OperationFailed(action, detail)))
     }
 
-    /** 48bit 密钥数值 → 6 字节大端（与卡上存储 / 协议传输的字节序一致） */
+    /**
+     * 48bit 密钥数值 → 6 字节大端（与卡上存储 / 协议传输的字节序一致）。
+     *
+     * NDK 求解返回的是 Long（如 0xA0A1A2A3A4A5），要变回卡上的 6 字节。
+     * 关键在 `MF1_KEY_SIZE - 1 - i`：**i 越小越要取高位字节**，这就是「大端」。
+     * 若写成 `i * 8` 就变成了小端，密钥会整个反过来。
+     */
     private fun longToKey(value: Long): ByteArray =
         ByteArray(ChameleonSession.MF1_KEY_SIZE) { i ->
             ((value shr ((ChameleonSession.MF1_KEY_SIZE - 1 - i) * 8)) and 0xFF).toByte()

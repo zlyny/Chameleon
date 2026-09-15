@@ -22,6 +22,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -36,11 +37,14 @@ import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.example.chameleon.DiscoveredDevice
 import com.example.chameleon.MainViewModel
 import com.example.chameleon.R
+import com.example.chameleon.ui.theme.ChameleonTheme
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.drop
 
@@ -59,13 +63,12 @@ import kotlinx.coroutines.flow.drop
  */
 @Composable
 fun ScanScreen(
-    scanViewModel: ScanViewModel,
-    mainViewModel: MainViewModel,
+    viewModel: MainViewModel,
     modifier: Modifier = Modifier,
 ) {
     val context = LocalContext.current
-    val scanState by scanViewModel.scanState.collectAsStateWithLifecycle()
-    val connectionState by mainViewModel.connectionState.collectAsStateWithLifecycle()
+    val scanState by viewModel.scanState.collectAsStateWithLifecycle()
+    val connectionState by viewModel.connectionState.collectAsStateWithLifecycle()
 
     var permissionDenied by remember { mutableStateOf(false) }
 
@@ -73,7 +76,7 @@ fun ScanScreen(
         ActivityResultContracts.RequestMultiplePermissions(),
     ) { result ->
         permissionDenied = !result.values.all { it }
-        if (!permissionDenied) scanViewModel.startScan()
+        if (!permissionDenied) viewModel.startScan()
     }
 
     /** 缺失权限时先申请，权限就绪后开始扫描 */
@@ -83,7 +86,7 @@ fun ScanScreen(
         }
         if (missing.isEmpty()) {
             permissionDenied = false
-            scanViewModel.startScan()
+            viewModel.startScan()
         } else {
             permissionLauncher.launch(missing.toTypedArray())
         }
@@ -101,12 +104,19 @@ fun ScanScreen(
             }
     }
 
-    if (connectionState is MainViewModel.ConnectionState.Connected) {
+    // 离开本页（切到其它 tab）即停止扫描：BLE 扫描是耗电操作，不该在后台继续跑。
+    // 回到本页时上面的 LaunchedEffect(Unit) 会重新触发一次扫描，体感不变。
+    DisposableEffect(Unit) {
+        onDispose { viewModel.stopScan() }
+    }
+
+    val connected = connectionState as? MainViewModel.ConnectionState.Connected
+    if (connected != null) {
         ConnectedPanel(
-            name = (connectionState as MainViewModel.ConnectionState.Connected).name,
-            address = (connectionState as MainViewModel.ConnectionState.Connected).address,
-            onBattery = mainViewModel::requestBatteryInfo,
-            onDisconnect = mainViewModel::disconnect,
+            name = connected.name,
+            address = connected.address,
+            onBattery = viewModel::requestBatteryInfo,
+            onDisconnect = viewModel::disconnect,
             modifier = modifier,
         )
     } else {
@@ -114,15 +124,15 @@ fun ScanScreen(
             state = scanState,
             permissionDenied = permissionDenied,
             onToggle = {
-                if (scanState is ScanViewModel.ScanState.Scanning) {
-                    scanViewModel.stopScan()
+                if (scanState is MainViewModel.ScanState.Scanning) {
+                    viewModel.stopScan()
                 } else {
                     requestPermissionsAndScan()
                 }
             },
             onDeviceClick = { device ->
-                scanViewModel.stopScan()
-                mainViewModel.connectDevice(device.address, device.name)
+                viewModel.stopScan()
+                viewModel.connectDevice(device.address, device.name)
             },
             modifier = modifier,
         )
@@ -135,33 +145,34 @@ fun ScanScreen(
 
 @Composable
 private fun ScanPanel(
-    state: ScanViewModel.ScanState,
+    state: MainViewModel.ScanState,
     permissionDenied: Boolean,
     onToggle: () -> Unit,
     onDeviceClick: (DiscoveredDevice) -> Unit,
     modifier: Modifier = Modifier,
 ) {
+    val context = LocalContext.current
     val devices = when (state) {
-        is ScanViewModel.ScanState.Scanning -> state.devices
-        is ScanViewModel.ScanState.Finished -> state.devices
+        is MainViewModel.ScanState.Scanning -> state.devices
+        is MainViewModel.ScanState.Finished -> state.devices
         else -> emptyList()
     }
     val statusText = when (state) {
-        ScanViewModel.ScanState.Idle -> stringResource(R.string.state_scan_ready)
-        is ScanViewModel.ScanState.Scanning ->
+        MainViewModel.ScanState.Idle -> stringResource(R.string.state_scan_ready)
+        is MainViewModel.ScanState.Scanning ->
             stringResource(R.string.scan_state_scanning, state.devices.size)
 
-        is ScanViewModel.ScanState.Finished ->
+        is MainViewModel.ScanState.Finished ->
             stringResource(R.string.scan_state_finished, state.devices.size)
 
-        is ScanViewModel.ScanState.Failed -> state.message
+        is MainViewModel.ScanState.Failed -> state.error.toText(context)
     }
     val buttonText = stringResource(
         when (state) {
-            ScanViewModel.ScanState.Idle -> R.string.btn_scan
-            is ScanViewModel.ScanState.Scanning -> R.string.btn_stop_scan
-            is ScanViewModel.ScanState.Finished -> R.string.btn_rescan
-            is ScanViewModel.ScanState.Failed -> R.string.btn_rescan
+            MainViewModel.ScanState.Idle -> R.string.btn_scan
+            is MainViewModel.ScanState.Scanning -> R.string.btn_stop_scan
+            is MainViewModel.ScanState.Finished -> R.string.btn_rescan
+            is MainViewModel.ScanState.Failed -> R.string.btn_rescan
         },
     )
 
@@ -195,7 +206,7 @@ private fun ScanPanel(
         if (devices.isEmpty()) {
             Text(
                 text = stringResource(
-                    if (state is ScanViewModel.ScanState.Finished) {
+                    if (state is MainViewModel.ScanState.Finished) {
                         R.string.scan_no_device
                     } else {
                         R.string.scan_hint
@@ -319,4 +330,37 @@ private fun Int.toSignalLevel(): Int = when {
     this >= -67 -> 2
     this >= -80 -> 1
     else -> 0
+}
+
+@Preview(showBackground = true)
+@Composable
+private fun ScanPanelPreview() {
+    ChameleonTheme {
+        ScanPanel(
+            state = MainViewModel.ScanState.Scanning(
+                devices = listOf(
+                    DiscoveredDevice("AA:BB:CC:DD:EE:FF", "Chameleon Ultra", -48),
+                    DiscoveredDevice("11:22:33:44:55:66", null, -71),
+                ),
+            ),
+            permissionDenied = false,
+            onToggle = {},
+            onDeviceClick = {},
+            modifier = Modifier.padding(16.dp),
+        )
+    }
+}
+
+@Preview(showBackground = true)
+@Composable
+private fun ConnectedPanelPreview() {
+    ChameleonTheme {
+        ConnectedPanel(
+            name = "Chameleon Ultra",
+            address = "AA:BB:CC:DD:EE:FF",
+            onBattery = {},
+            onDisconnect = {},
+            modifier = Modifier.padding(16.dp),
+        )
+    }
 }

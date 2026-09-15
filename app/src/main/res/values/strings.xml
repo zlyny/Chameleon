@@ -46,7 +46,6 @@
     <string name="label_atqa">ATQA</string>
     <string name="label_ats">ATS</string>
     <string name="label_prng">PRNG type</string>
-    <string name="label_type">Guessed type</string>
     <string name="tag_value_placeholder">--</string>
     <string name="tag_ats_none">No</string>
     <string name="reader_keys_title">Keys</string>
@@ -65,6 +64,24 @@
     <string name="btn_dump">Dump</string>
     <string name="btn_dumping">正在读取…</string>
     <string name="dump_saved_at">已存入卡片库：%1$s</string>
+
+    <!-- 读卡流程错误提示：与 ReaderError 的分支一一对应，由 ReaderError.toText 映射 -->
+    <string name="err_not_connected">设备未连接</string>
+    <string name="err_card_not_read">请先读卡</string>
+    <string name="err_device_busy">设备忙（读卡或写入进行中），请稍后再试</string>
+    <string name="err_no_known_key">缺少已知密钥：请先用字典攻击恢复至少一个密钥</string>
+    <string name="err_mifare_not_supported">此卡不支持 Mifare Classic，无法恢复密钥</string>
+    <string name="err_hard_prng">Hard PRNG 卡需使用 hardnested，暂不支持</string>
+    <string name="err_prng_unknown">PRNG 类型未知，请重新读卡</string>
+    <string name="err_nested_miss">本次未找到密钥（属正常现象），可再次点击红叉重试</string>
+    <string name="err_nested_verify">候选密钥验证未通过（属正常现象），可再次点击红叉重试</string>
+    <string name="err_dump_read">读取 dump 文件失败</string>
+    <string name="err_dump_meta">dump 元数据解析失败</string>
+    <string name="err_dump_not_1k">dump 数据非 1K 卡（64 块），暂不支持</string>
+    <string name="err_no_auth_log">无认证日志：请先用「写入槽」模拟该卡并让读卡器认证</string>
+    <string name="err_auth_log_uid_mismatch">认证日志与当前卡片 UID 不符</string>
+    <string name="err_mfkey32_no_key">mfkey32 未找到密钥（同组至少 2 条认证记录，可让读卡器多认证几次后重试）</string>
+    <string name="err_operation_failed">%1$s失败：%2$s</string>
 
     <!-- 日志页 -->
     <string name="log_title">通信日志</string>
@@ -88,7 +105,6 @@
     <string name="card_delete_confirm_title">删除卡片</string>
     <string name="card_delete_confirm_msg">确定删除 %1$s？该操作不可恢复。</string>
     <string name="card_deleted">已删除 %1$s</string>
-    <string name="card_write_start_failed">无法开始写入（未连接 / 设备忙 / 数据异常），详见日志</string>
     <string name="card_read_failed">读取卡片数据失败</string>
     <string name="card_export_done">已导出到 Download：%1$s</string>
     <string name="card_export_failed">导出失败：%1$s</string>

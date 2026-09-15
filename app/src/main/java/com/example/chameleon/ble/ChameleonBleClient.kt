@@ -3,8 +3,9 @@
 package com.example.chameleon.ble
 
 import com.example.chameleon.protocol.ChameleonFrame
+import com.example.chameleon.protocol.ChameleonTransport
+import com.example.chameleon.protocol.ChameleonTransportException
 import com.example.chameleon.protocol.FrameDecoder
-import java.io.IOException
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
@@ -30,8 +31,8 @@ import no.nordicsemi.kotlin.ble.core.WriteType
 import no.nordicsemi.kotlin.ble.core.util.chunked
 import kotlin.uuid.ExperimentalUuidApi
 
-/** BLE 连接/通信过程中的异常 */
-class ChameleonBleException(message: String) : IOException(message)
+/** BLE 连接/通信过程中的异常（[ChameleonTransportException] 的 BLE 实现） */
+class ChameleonBleException(message: String) : ChameleonTransportException(message)
 
 /**
  * ChameleonUltra BLE 客户端，基于 Nordic Kotlin-BLE-Library 封装 NUS 通信。
@@ -43,8 +44,11 @@ class ChameleonBleException(message: String) : IOException(message)
  * 所有回调均在 [Dispatchers.Main] 上执行。
  *
  * 调用方需保证已获得 BLUETOOTH_CONNECT（Android 12+）权限。
+ *
+ * 实现 [ChameleonTransport]：设备层（ChameleonSession）只认接口，
+ * 因此连接生命周期仍由本类 / MainViewModel 负责，而命令编排与 BLE 解耦。
  */
-class ChameleonBleClient(private val centralManager: CentralManager) {
+class ChameleonBleClient(private val centralManager: CentralManager) : ChameleonTransport {
 
     interface Listener {
 
@@ -65,6 +69,9 @@ class ChameleonBleClient(private val centralManager: CentralManager) {
     }
 
     var listener: Listener? = null
+
+    override val isReady: Boolean
+        get() = ready
 
     /** 当前协商生效的 ATT MTU */
     var mtu: Int = 0
@@ -217,13 +224,21 @@ class ChameleonBleClient(private val centralManager: CentralManager) {
      * @param timeoutMs 等待响应的超时时间
      * @throws ChameleonBleException 发送失败、超时或等待期间连接断开
      */
-    suspend fun request(frame: ChameleonFrame, timeoutMs: Long = DEFAULT_REQUEST_TIMEOUT_MS): ChameleonFrame {
-        requestMutex.withLock {             //加锁保证一发一收严格对应
+    override suspend fun request(frame: ChameleonFrame, timeoutMs: Long): ChameleonFrame {
+        // 为什么整段加锁：固件是「一问一答」的串行模型，两个并发请求会让响应
+        // 张冠李戴。Mutex 保证同一时刻只有一个请求在途，也就不存在排队混淆。
+        requestMutex.withLock {
+            // CompletableDeferred 可以理解成「一次性的收件箱」：
+            // 这里挂起等它，notify 回调线程收到帧时 complete 它（见 connect() 的 subscribe）。
+            // 用它而不是回调，是因为 suspend 能天然配合超时与结构化取消。
             val deferred = CompletableDeferred<ChameleonFrame>()
-            pendingResponse = deferred          //接收邮箱
+            pendingResponse = deferred
             try {
                 send(frame)
                 try {
+                    // withTimeout 超时会抛 TimeoutCancellationException（它是
+                    // CancellationException 的子类），这里转成业务异常，
+                    // 免得把「超时」误当成「协程被取消」往上传播。
                     return withTimeout(timeoutMs) { deferred.await() }
                 } catch (e: TimeoutCancellationException) {
                     throw ChameleonBleException(
@@ -231,10 +246,15 @@ class ChameleonBleClient(private val centralManager: CentralManager) {
                     )
                 }
             } finally {
-                pendingResponse = null      //每次通信建立新邮箱,防止上一个消息延时到达新的请求上
+                // 必须清空：否则一次迟到的响应会掉进下一个请求的收件箱，
+                // 表现为「上一条命令的结果被下一条命令读到」。
+                pendingResponse = null
             }
         }
     }
+
+    /** [ChameleonTransport] 的关闭入口，等价 [disconnect] */
+    override fun close() = disconnect()
 
     /** 主动断开连接；未连接时调用无副作用。断开结果经 [Listener.onDisconnected] 回调。 */
     fun disconnect() {
@@ -287,7 +307,7 @@ class ChameleonBleClient(private val centralManager: CentralManager) {
     }
 
     private companion object {
-        /** 常规命令默认超时；慢命令（如字典攻击）由调用方显式传入更长超时 */
-        const val DEFAULT_REQUEST_TIMEOUT_MS = 5_000L
+        // 超时由调用方（ChameleonSession）按命令指定：常规 5s、模式切换 10s、
+        // 字典攻击 30s。这里不再设默认值，避免传输层替上层决定超时。
     }
 }

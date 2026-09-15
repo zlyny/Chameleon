@@ -18,27 +18,19 @@ package com.example.chameleon.protocol
  */
 class ChameleonFrame(val cmd: Int, val status: Int, val data: ByteArray) {
 
-    /** 命令是否执行成功 */
-    val isSuccess: Boolean
-        get() = status == STATUS_SUCCESS
-
     /** 编码为待发送的字节序列 */
     fun encode(): ByteArray {
         val out = ByteArray(FRAME_OVERHEAD + data.size)
         out[0] = SOF_BYTE_1
         out[1] = SOF_BYTE_2
-        putU16(out, 2, cmd)
-        putU16(out, 4, status)
-        putU16(out, 6, data.size)
+        HexUtils.writeU16(out, 2, cmd)
+        HexUtils.writeU16(out, 4, status)
+        HexUtils.writeU16(out, 6, data.size)
         out[8] = lrc(out, 2, 8).toByte()
         data.copyInto(out, 9)
         out[9 + data.size] = lrc(data, 0, data.size).toByte()
         return out
     }
-
-    override fun toString(): String =
-        "ChameleonFrame(cmd=${ChameleonCommand.nameOf(cmd)}, status=0x%04X, data=${HexUtils.format(data)})"
-            .format(status)
 
     companion object {
         /** 帧起始字节 0x11 */
@@ -47,7 +39,6 @@ class ChameleonFrame(val cmd: Int, val status: Int, val data: ByteArray) {
         /** SOF 的 LRC 校验值 0xEF */
         val SOF_BYTE_2: Byte = 0xEF.toByte()
 
-        const val STATUS_SUCCESS = 0x0000
         const val MAX_DATA_LEN = 512
         const val FRAME_OVERHEAD = 10
 
@@ -68,20 +59,12 @@ class ChameleonFrame(val cmd: Int, val status: Int, val data: ByteArray) {
         fun decode(bytes: ByteArray): ChameleonFrame? {
             if (bytes.size < FRAME_OVERHEAD) return null
             if (bytes[0] != SOF_BYTE_1 || bytes[1] != SOF_BYTE_2) return null
-            val len = u16(bytes, 6)
+            val len = HexUtils.readU16(bytes, 6)
             if (len > MAX_DATA_LEN || bytes.size != FRAME_OVERHEAD + len) return null
             if (bytes[8] != lrc(bytes, 2, 8).toByte()) return null
             val data = bytes.copyOfRange(9, 9 + len)
             if (bytes[9 + len] != lrc(data).toByte()) return null
-            return ChameleonFrame(u16(bytes, 2), u16(bytes, 4), data)
+            return ChameleonFrame(HexUtils.readU16(bytes, 2), HexUtils.readU16(bytes, 4), data)
         }
-
-        private fun putU16(dst: ByteArray, offset: Int, value: Int) {
-            dst[offset] = (value ushr 8).toByte()
-            dst[offset + 1] = (value and 0xFF).toByte()
-        }
-
-        private fun u16(src: ByteArray, offset: Int): Int =
-            ((src[offset].toInt() and 0xFF) shl 8) or (src[offset + 1].toInt() and 0xFF)
     }
 }

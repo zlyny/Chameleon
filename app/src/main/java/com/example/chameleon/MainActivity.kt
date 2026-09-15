@@ -3,7 +3,9 @@ package com.example.chameleon
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
-import androidx.lifecycle.viewmodel.compose.viewModel
+import androidx.activity.enableEdgeToEdge
+import androidx.compose.runtime.CompositionLocalProvider
+import com.example.chameleon.di.LocalAppContainer
 import com.example.chameleon.ui.theme.ChameleonTheme
 
 /**
@@ -18,9 +20,16 @@ class MainActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        // targetSdk 37：Android 15+ 对 targetSdk ≥ 35 强制 edge-to-edge，
+        // 这里显式开启以保持各系统版本行为一致；状态栏 / 导航栏的避让由
+        // Scaffold 的默认 contentWindowInsets（WindowInsets.systemBars）处理。
+        enableEdgeToEdge()
+        val container = (application as ChameleonApplication).container
         setContent {
-            ChameleonTheme {
-                ChameleonApp(mainViewModel = viewModel())
+            CompositionLocalProvider(LocalAppContainer provides container) {
+                ChameleonTheme {
+                    ChameleonApp()
+                }
             }
         }
     }

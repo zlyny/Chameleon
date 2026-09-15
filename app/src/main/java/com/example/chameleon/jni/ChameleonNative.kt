@@ -10,7 +10,6 @@ package com.example.chameleon.jni
  * - Static Nested 攻击求解（Static PRNG 卡，staticnested.c）
  * - Nested 攻击求解（Weak PRNG 卡，nested.c）
  * - mfkey32 攻击求解与单条记录复核（mfkey32v2.c，模拟卡认证日志离线破解）
- * - 库版本查询（JNI 链路连通性验证）
  *
  * 规划中（对应 MF1_DARKSIDE_ACQUIRE 命令）：
  * - Crypto1 密钥流恢复（darkside）
@@ -20,9 +19,6 @@ object ChameleonNative {
     init {
         System.loadLibrary("chameleon")
     }
-
-    /** 获取原生库版本号 */
-    external fun nativeVersion(): String
 
     /**
      * Static Nested 攻击求解。

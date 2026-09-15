@@ -49,16 +49,21 @@ class FrameDecoder {
     /** 丢弃 SOF 之前的噪声字节，返回缓冲区头部是否为合法 SOF */
     private fun synchronize(): Boolean {
         var i = 0
+        // 注意循环条件是 `size - 1`：SOF 是两个字节，最后一个字节无法与「下一个字节」
+        // 配对，所以不能参与匹配（否则会越界）。
         while (i < buffer.size - 1) {
             if (buffer[i] == ChameleonFrame.SOF_BYTE_1 &&
                 buffer[i + 1] == ChameleonFrame.SOF_BYTE_2
             ) {
+                // 把 SOF 之前的噪声整段切掉，让 buffer[0..1] 就是帧头
                 if (i > 0) buffer = buffer.copyOfRange(i, buffer.size)
                 return true
             }
             i++
         }
-        // 未找到完整 SOF；末尾若是孤立的 0x11 则保留，可能与下一包组成帧头
+        // 整段都没找到完整 SOF。这里有个容易漏的边界：BLE 分包可能把 0x11 和 0xEF
+        // 拆在两包里，当前 buffer 末尾那个孤立的 0x11 很可能就是下一包的帧头前半字节，
+        // 所以**只保留它**而不是清空——丢掉就会永远解不出这一帧。
         buffer = if (buffer.isNotEmpty() && buffer.last() == ChameleonFrame.SOF_BYTE_1) {
             buffer.copyOfRange(buffer.size - 1, buffer.size)
         } else {

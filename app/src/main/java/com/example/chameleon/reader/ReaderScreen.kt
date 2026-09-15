@@ -14,13 +14,9 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
 import androidx.compose.material3.ElevatedCard
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.SnackbarHost
-import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.stringResource
@@ -46,23 +42,13 @@ import com.example.chameleon.device.TagInfo
 fun ReaderScreen(viewModel: MainViewModel, modifier: Modifier = Modifier) {
     val state by viewModel.readerState.collectAsStateWithLifecycle()
     val connectionState by viewModel.connectionState.collectAsStateWithLifecycle()
-    val snackbarHostState = remember { SnackbarHostState() }
 
-    // lastError 是「单次事件」：展示后立刻消费，否则旋转/重新订阅会重复弹
-    LaunchedEffect(state.lastError) {
-        state.lastError?.let {
-            snackbarHostState.showSnackbar(it)
-            viewModel.consumeLastError()
-        }
-    }
-
-    Box(modifier = modifier.fillMaxSize()) {
-        Column(
-            modifier = Modifier
-                .fillMaxSize()
-                .verticalScroll(rememberScrollState())
-                .padding(16.dp),
-        ) {
+    Column(
+        modifier = modifier
+            .fillMaxSize()
+            .verticalScroll(rememberScrollState())
+            .padding(16.dp),
+    ) {
             TagInfoCard(state.tagInfo)
 
             Row(modifier = Modifier.padding(top = 16.dp)) {
@@ -134,13 +120,6 @@ fun ReaderScreen(viewModel: MainViewModel, modifier: Modifier = Modifier) {
                     style = MaterialTheme.typography.bodySmall,
                 )
             }
-        }
-
-        // 落在读卡页自身区域内（位于底部导航栏之上），无需 setAnchorView
-        SnackbarHost(
-            hostState = snackbarHostState,
-            modifier = Modifier.align(Alignment.BottomCenter).padding(bottom = 8.dp),
-        )
     }
 }
 

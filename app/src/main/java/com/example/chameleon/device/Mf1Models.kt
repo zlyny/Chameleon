@@ -1,5 +1,7 @@
 package com.example.chameleon.device
 
+import com.example.chameleon.protocol.HexUtils
+
 /** ChameleonUltra 设备工作模式 */
 enum class DeviceMode {
     UNKNOWN,
@@ -107,14 +109,7 @@ data class TagInfo(
 
     /** 4 字节 UID 的无符号 32 位数值（mfkey32 等离线求解参数）；非 4 字节 UID 为 0 */
     val uidValue: Long
-        get() = if (uid.size == 4) {
-            ((uid[0].toLong() and 0xFF) shl 24) or
-                ((uid[1].toLong() and 0xFF) shl 16) or
-                ((uid[2].toLong() and 0xFF) shl 8) or
-                (uid[3].toLong() and 0xFF)
-        } else {
-            0L
-        }
+        get() = if (uid.size == 4) HexUtils.readU32(uid, 0) else 0L
 }
 
 /** 单个扇区单个密钥位的恢复状态 */
@@ -160,10 +155,7 @@ data class StaticNestedAcquire(
 ) {
     /** UID 的无符号 32 位数值（JNI 求解参数） */
     val uidValue: Long
-        get() = ((uid[0].toLong() and 0xFF) shl 24) or
-            ((uid[1].toLong() and 0xFF) shl 16) or
-            ((uid[2].toLong() and 0xFF) shl 8) or
-            (uid[3].toLong() and 0xFF)
+        get() = HexUtils.readU32(uid, 0)
 }
 
 /** 一组 Nested 采集随机数（Weak PRNG 卡）：明文 NT、加密 NT 与传输奇偶位 */

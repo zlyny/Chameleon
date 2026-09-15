@@ -1,9 +1,10 @@
 package com.example.chameleon.device
 
-import com.example.chameleon.ble.ChameleonBleClient
 import com.example.chameleon.protocol.ChameleonCommand
+import com.example.chameleon.protocol.ChameleonTransport
 import com.example.chameleon.protocol.ChameleonFrame
 import com.example.chameleon.protocol.ChameleonStatus
+import com.example.chameleon.protocol.HexUtils
 import java.io.IOException
 
 /** 设备返回非预期状态码时抛出，[statusDescription] 为用户可读的状态描述 */
@@ -21,7 +22,7 @@ class ChameleonStatusException(
  *
  * 当前面向 Mifare Classic 1K（16 扇区）实现；2K/4K 支持在 [MF1_SECTOR_COUNT] 扩展。
  */
-class ChameleonSession(private val client: ChameleonBleClient) {
+class ChameleonSession(private val transport: ChameleonTransport) {
 
     /** 读取设备当前工作模式 */
     suspend fun getDeviceMode(): DeviceMode {
@@ -105,10 +106,20 @@ class ChameleonSession(private val client: ChameleonBleClient) {
 
         // 初始全 1（全部跳过），再把需检查的密钥位清 0；
         // [shouldCheck] 让调用方排除已恢复的位（如二次字典攻击只查缺失位）
+        //
+        // mask 的位布局（**跳过掩码**，1 = 跳过、0 = 检查）。1 字节装 4 个扇区 × 2 个密钥：
+        //   mask[0] = [S0A S0B S1A S1B S2A S2B S3A S3B]   ← 高位在前
+        //   mask[1] = [S4A ...  S7B]
+        //   ...
+        //   mask[9] = [S36A ... S39B]
+        // 所以扇区 s 的两个位在 mask[s/4] 中、从第 (6 - (s%4)*2) 位开始：
+        //   s=0 → bit7(A) bit6(B)；s=1 → bit5/bit4；s=2 → bit3/bit2；s=3 → bit1/bit0
+        // 16 个扇区检查全部时，mask[0..3] 应为 0，mask[4..9] 保持 0xFF（跳过不存在的扇区）。
         val mask = ByteArray(MASK_SIZE) { 0xFF.toByte() }
         for (s in 0 until sectorCount) {    //16个扇区
             for ((type, bit) in listOf(KeyType.A to 0b10, KeyType.B to 0b01)) { // a/b两个密钥
                 if (shouldCheck(s, type)) {
+                    // and + inv = 把该位清 0，其余位保持不动
                     mask[s / 4] = (mask[s / 4].toInt() and (bit shl (6 - (s % 4) * 2)).inv()).toByte()
                 }
             }
@@ -167,8 +178,8 @@ class ChameleonSession(private val client: ChameleonBleClient) {
         val pairs = (0 until (resp.data.size - 4) / 8).map { i ->
             val base = 4 + i * 8
             NtPair(
-                nt = readU32(resp.data, base),
-                ntEnc = readU32(resp.data, base + 4),
+                nt = HexUtils.readU32(resp.data, base),
+                ntEnc = HexUtils.readU32(resp.data, base + 4),
             )
         }
         return StaticNestedAcquire(uid = uid, ntPairs = pairs)
@@ -186,7 +197,7 @@ class ChameleonSession(private val client: ChameleonBleClient) {
         val resp = request(ChameleonCommand.MF1_DETECT_NT_DIST, payload)
         requireStatus(resp, ChameleonStatus.HF_TAG_OK)
         require(resp.data.size >= 8) { "DETECT_NT_DIST 响应数据异常" }
-        return NtDist(uid = readU32(resp.data, 0), dist = readU32(resp.data, 4).toInt())
+        return NtDist(uid = HexUtils.readU32(resp.data, 0), dist = HexUtils.readU32(resp.data, 4).toInt())
     }
 
     /**
@@ -214,8 +225,8 @@ class ChameleonSession(private val client: ChameleonBleClient) {
         return (0 until resp.data.size / 9).map { i ->
             val base = i * 9
             NtTriple(
-                nt = readU32(resp.data, base),
-                ntEnc = readU32(resp.data, base + 4),
+                nt = HexUtils.readU32(resp.data, base),
+                ntEnc = HexUtils.readU32(resp.data, base + 4),
                 par = resp.data[base + 8].toInt() and 0xFF,
             )
         }
@@ -236,7 +247,7 @@ class ChameleonSession(private val client: ChameleonBleClient) {
         // `hf 14a raw -s -c` 抓包帧（70 00 64 00 10 60 00）一致
         val options = (0b0111_0000).toByte()
         val payload = byteArrayOf(options) +
-            u16be(respTimeoutMs) + u16be(data.size * 8) + data
+            HexUtils.u16be(respTimeoutMs) + HexUtils.u16be(data.size * 8) + data
         val resp = request(ChameleonCommand.HF14A_RAW, payload)
         requireStatus(resp, ChameleonStatus.HF_TAG_OK)
         return resp.data
@@ -250,7 +261,7 @@ class ChameleonSession(private val client: ChameleonBleClient) {
      */
     suspend fun detectStaticNestedGen(): StaticNestedGen? = try {
         val nt = hf14aRaw(byteArrayOf(0x60, 0x00))
-        if (nt.size >= 4) StaticNestedGen.ofNt(readU32(nt, 0)) else null
+        if (nt.size >= 4) StaticNestedGen.ofNt(HexUtils.readU32(nt, 0)) else null
     } catch (_: ChameleonStatusException) {
         null
     }
@@ -311,7 +322,7 @@ class ChameleonSession(private val client: ChameleonBleClient) {
         val resp = request(ChameleonCommand.MF1_GET_DETECTION_COUNT)
         requireStatus(resp, ChameleonStatus.SUCCESS)
         require(resp.data.size >= 4) { "GET_DETECTION_COUNT 响应数据异常" }
-        return readU32(resp.data, 0).toInt()
+        return HexUtils.readU32(resp.data, 0).toInt()
     }
 
     /**
@@ -322,7 +333,7 @@ class ChameleonSession(private val client: ChameleonBleClient) {
      * 28 条），调用方按返回条数推进索引分批下载，直至取满总数。
      */
     suspend fun getDetectionLogs(startIndex: Int): List<AuthLog> {
-        val resp = request(ChameleonCommand.MF1_GET_DETECTION_LOG, u32be(startIndex))
+        val resp = request(ChameleonCommand.MF1_GET_DETECTION_LOG, HexUtils.u32be(startIndex))
         requireStatus(resp, ChameleonStatus.SUCCESS)
         require(resp.data.size % AUTH_LOG_SIZE == 0) { "GET_DETECTION_LOG 响应数据异常" }
         return (0 until resp.data.size / AUTH_LOG_SIZE).map { i ->
@@ -332,10 +343,10 @@ class ChameleonSession(private val client: ChameleonBleClient) {
                 block = resp.data[base].toInt() and 0xFF,
                 isKeyB = bits and 0x01 != 0,
                 isNested = bits and 0x02 != 0,
-                uid = readU32(resp.data, base + 2),
-                nt = readU32(resp.data, base + 6),
-                nr = readU32(resp.data, base + 10),
-                ar = readU32(resp.data, base + 14),
+                uid = HexUtils.readU32(resp.data, base + 2),
+                nt = HexUtils.readU32(resp.data, base + 6),
+                nr = HexUtils.readU32(resp.data, base + 10),
+                ar = HexUtils.readU32(resp.data, base + 14),
             )
         }
     }
@@ -372,26 +383,7 @@ class ChameleonSession(private val client: ChameleonBleClient) {
         cmd: Int,
         data: ByteArray = ByteArray(0),
         timeoutMs: Long = DEFAULT_TIMEOUT_MS,
-    ): ChameleonFrame = client.request(ChameleonFrame(cmd, 0, data), timeoutMs)
-
-    /** 大端读取 4 字节无符号整数（Long 存放避免符号问题） */
-    private fun readU32(data: ByteArray, offset: Int): Long =
-        ((data[offset].toLong() and 0xFF) shl 24) or
-            ((data[offset + 1].toLong() and 0xFF) shl 16) or
-            ((data[offset + 2].toLong() and 0xFF) shl 8) or
-            (data[offset + 3].toLong() and 0xFF)
-
-    /** 无符号 16 位整数的大端编码（HF14A_RAW 等命令的协议字段） */
-    private fun u16be(value: Int): ByteArray =
-        byteArrayOf((value shr 8).toByte(), value.toByte())
-
-    /** 无符号 32 位整数的大端编码（MF1_GET_DETECTION_LOG 的索引参数） */
-    private fun u32be(value: Int): ByteArray = byteArrayOf(
-        (value shr 24).toByte(),
-        (value shr 16).toByte(),
-        (value shr 8).toByte(),
-        value.toByte(),
-    )
+    ): ChameleonFrame = transport.request(ChameleonFrame(cmd, 0, data), timeoutMs)
 
     /** 校验响应状态，非预期时抛出携带可读信息的异常 */
     private fun requireStatus(resp: ChameleonFrame, expected: ChameleonStatus) {

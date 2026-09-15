@@ -7,7 +7,7 @@
         <!-- Secondary brand color. -->
         <item name="colorSecondary">@color/teal_200</item>
         <item name="colorOnSecondary">@color/black</item>
-        <!-- Status bar color. -->
-        <item name="android:statusBarColor">@color/purple_700</item>
-    </style>
+        <!-- 不再设置 statusBarColor：MainActivity 已调用 enableEdgeToEdge()，
+             状态栏由系统透明绘制，此项会被忽略（留着只会误导） -->
+        </style>
 </resources>

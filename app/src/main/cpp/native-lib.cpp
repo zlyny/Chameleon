@@ -83,14 +83,6 @@ bool mfkey32Pair(uint32_t uid, const Mfkey32Rec& a, const Mfkey32Rec& b, uint64_
 
 } // namespace
 
-extern "C" JNIEXPORT jstring JNICALL
-Java_com_example_chameleon_jni_ChameleonNative_nativeVersion(
-        JNIEnv* env,
-        jobject /* this */) {
-    std::string version = "chameleon-native 0.2.0";
-    return env->NewStringUTF(version.c_str());
-}
-
 /**
  * Static Nested 攻击求解（移植自 ChameleonUltra software/src/staticnested.c）。
  *

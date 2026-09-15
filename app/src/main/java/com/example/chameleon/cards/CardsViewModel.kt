@@ -1,15 +1,15 @@
 package com.example.chameleon.cards
 
-import android.app.Application
+import android.content.ContentResolver
 import android.content.ContentValues
 import android.os.Build
 import android.os.Environment
 import android.provider.MediaStore
-import androidx.lifecycle.AndroidViewModel
+import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
-import com.example.chameleon.device.DumpCard
-import com.example.chameleon.device.DumpContent
-import com.example.chameleon.device.DumpRepository
+import com.example.chameleon.data.DumpCard
+import com.example.chameleon.data.DumpContent
+import com.example.chameleon.data.DumpRepository
 import java.io.File
 import java.io.IOException
 import kotlinx.coroutines.Dispatchers
@@ -25,10 +25,14 @@ import kotlinx.coroutines.withContext
  * [com.example.chameleon.MainViewModel.writeDumpToEmulator] 承担。
  *
  * 文件扫描与导出走 IO 调度器，避免阻塞主线程。
+ *
+ * 依赖经构造注入（见 [com.example.chameleon.di.AppContainer]）：本类不再
+ * 持有 `Application`，因此可以在 JVM 单测里直接实例化。
  */
-class CardsViewModel(application: Application) : AndroidViewModel(application) {
-
-    private val repository = DumpRepository(application)
+class CardsViewModel(
+    private val dumpRepository: DumpRepository,
+    private val contentResolver: ContentResolver,
+) : ViewModel() {
 
     private val _dumps = MutableStateFlow<List<DumpCard>>(emptyList())
     val dumps: StateFlow<List<DumpCard>> = _dumps.asStateFlow()
@@ -40,20 +44,20 @@ class CardsViewModel(application: Application) : AndroidViewModel(application) {
     /** 重新扫描卡片库（进入页面 / 删除 / Reader 页新 Dump 后调用） */
     fun refresh() {
         viewModelScope.launch(Dispatchers.IO) {
-            val cards = repository.listDumps()
+            val cards = dumpRepository.listDumps()
             _dumps.value = cards
         }
     }
 
     /** 删除卡片并刷新列表，返回是否删除成功 */
     fun delete(dump: DumpCard): Boolean {
-        val ok = repository.delete(dump.fileName)
+        val ok = dumpRepository.delete(dump.fileName)
         refresh()
         return ok
     }
 
     /** 读取卡片内容（查看 / 写入槽 / 导出共用），文件异常返回 null */
-    fun readBlocks(dump: DumpCard): DumpContent? = repository.read(dump.fileName)
+    fun readBlocks(dump: DumpCard): DumpContent? = dumpRepository.read(dump.fileName)
 
     /**
      * 导出卡片为二进制 .bin 到系统 Download 目录，返回写入的文件名。
@@ -76,7 +80,7 @@ class CardsViewModel(application: Application) : AndroidViewModel(application) {
 
     /** Android 10+：经 MediaStore 写入 Download 集合（无需存储权限） */
     private fun insertIntoDownloads(baseName: String, binary: ByteArray): String {
-        val resolver = getApplication<Application>().contentResolver
+        val resolver = contentResolver
         // 同名判断以本应用可见（自己贡献）的文件为限；与其他应用文件
         // 重名时由系统在插入阶段自动加序号，下方回查实际文件名兜底
         val name = uniqueName(baseName) { candidate ->

@@ -1,6 +1,9 @@
-package com.example.chameleon.device
+package com.example.chameleon.data
 
 import android.content.Context
+import com.example.chameleon.device.ChameleonSession
+import com.example.chameleon.device.PrngType
+import com.example.chameleon.device.TagInfo
 import java.io.File
 import java.io.IOException
 

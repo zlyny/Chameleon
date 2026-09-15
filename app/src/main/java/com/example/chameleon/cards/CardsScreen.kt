@@ -18,32 +18,35 @@ import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.ElevatedCard
 import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.SnackbarHost
-import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.example.chameleon.MainViewModel
 import com.example.chameleon.R
+import com.example.chameleon.data.DumpCard
+import com.example.chameleon.data.DumpContent
 import com.example.chameleon.device.ChameleonSession
-import com.example.chameleon.device.DumpCard
-import com.example.chameleon.device.DumpContent
+import com.example.chameleon.device.PrngType
 import com.example.chameleon.reader.ReaderPhase
+import com.example.chameleon.ui.theme.ChameleonTheme
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -69,24 +72,28 @@ fun CardsScreen(
     val dumps by cardsViewModel.dumps.collectAsStateWithLifecycle()
     val readerState by mainViewModel.readerState.collectAsStateWithLifecycle()
 
-    val snackbarHostState = remember { SnackbarHostState() }
     val timeFormat = remember { SimpleDateFormat("yyyy-MM-dd HH:mm", Locale.getDefault()) }
 
-    /** Android 9 及以下导出需运行时存储权限：请求期间暂存待导出卡片 */
-    var pendingExport by remember { mutableStateOf<DumpCard?>(null) }
+    /**
+     * Android 9 及以下导出需运行时存储权限：请求期间暂存待导出卡片的**文件名**
+     * （而非 DumpCard）——用 rememberSaveable 才能在旋转后保住，授权回来
+     * 再按文件名从 dumps 里查回卡片。
+     */
+    var pendingExportFile by rememberSaveable { mutableStateOf<String?>(null) }
     var viewingDump by remember { mutableStateOf<ViewingDump?>(null) }
     var deleting by remember { mutableStateOf<DumpCard?>(null) }
 
-    fun notify(message: String) {
-        scope.launch { snackbarHostState.showSnackbar(message) }
-    }
+    /** 提示统一交给外壳的 SnackbarHost（ChameleonApp），本页不再自带一套 */
+    fun notify(message: String) = mainViewModel.showMessage(message)
 
     fun exportCard(dump: DumpCard) {
-        val content = cardsViewModel.readBlocks(dump) ?: run {
-            notify(context.getString(R.string.card_read_failed))
-            return
-        }
         scope.launch {
+            // readBlocks 是文件读取，切到 IO 线程（exportToDownloads 内部自带 IO 切换）
+            val content = withContext(Dispatchers.IO) { cardsViewModel.readBlocks(dump) }
+            if (content == null) {
+                notify(context.getString(R.string.card_read_failed))
+                return@launch
+            }
             runCatching { cardsViewModel.exportToDownloads(dump, content) }
                 .onSuccess { name ->
                     notify(context.getString(R.string.card_export_done, name))
@@ -105,13 +112,14 @@ fun CardsScreen(
     val exportPermissionLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.RequestPermission(),
     ) { granted ->
-        val dump = pendingExport ?: return@rememberLauncherForActivityResult
-        pendingExport = null
-        if (granted) {
-            exportCard(dump)
-        } else {
+        val fileName = pendingExportFile ?: return@rememberLauncherForActivityResult
+        pendingExportFile = null
+        if (!granted) {
             notify(context.getString(R.string.card_export_permission_denied))
+            return@rememberLauncherForActivityResult
         }
+        // 旋转后 dumps 可能尚未恢复，查不到时静默放弃（提示会让用户困惑）
+        dumps.firstOrNull { it.fileName == fileName }?.let(::exportCard)
     }
 
     fun onExport(dump: DumpCard) {
@@ -123,7 +131,7 @@ fun CardsScreen(
                 Manifest.permission.WRITE_EXTERNAL_STORAGE,
             ) != PackageManager.PERMISSION_GRANTED
         if (needsPermission) {
-            pendingExport = dump
+            pendingExportFile = dump.fileName
             exportPermissionLauncher.launch(Manifest.permission.WRITE_EXTERNAL_STORAGE)
         } else {
             exportCard(dump)
@@ -131,27 +139,25 @@ fun CardsScreen(
     }
 
     fun onView(dump: DumpCard) {
-        val content = cardsViewModel.readBlocks(dump) ?: run {
-            notify(context.getString(R.string.card_read_failed))
-            return
+        // readBlocks 是文件读取，切到 IO 线程
+        scope.launch {
+            val content = withContext(Dispatchers.IO) { cardsViewModel.readBlocks(dump) }
+            if (content == null) {
+                notify(context.getString(R.string.card_read_failed))
+                return@launch
+            }
+            viewingDump = ViewingDump(dump.uidHex, content)
         }
-        viewingDump = ViewingDump(dump.uidHex, content)
     }
 
-    // 写入槽的完成提示由本页消费（lastError 归读卡页消费，互不重复）
-    LaunchedEffect(readerState.lastSuccess) {
-        readerState.lastSuccess?.let {
-            snackbarHostState.showSnackbar(it)
-            mainViewModel.consumeLastSuccess()
-        }
-    }
+    // 读卡流程的成功 / 失败提示经 MainViewModel 的 Snackbar 通道由外壳统一展示：
+    // 本页发起的「写入槽 / 加载」失败时也能立刻看到提示（不依赖本页是否在场）
 
     // 设备流程（读卡 / 破解 / Dump / 写入槽）进行中禁用卡片操作，防误删或重复发起
     val busy = readerState.phase != ReaderPhase.Idle
     val writing = readerState.phase == ReaderPhase.WritingEmu
 
-    Box(modifier = modifier.fillMaxSize()) {
-        Column(modifier = Modifier.fillMaxSize().padding(16.dp)) {
+    Column(modifier = modifier.fillMaxSize().padding(16.dp)) {
             Text(
                 text = stringResource(R.string.cards_title),
                 style = MaterialTheme.typography.titleLarge,
@@ -181,11 +187,9 @@ fun CardsScreen(
                             subtitle = dump.subtitle(timeFormat),
                             busy = busy,
                             writing = writing,
-                            onWrite = {
-                                if (!mainViewModel.writeDumpToEmulator(dump)) {
-                                    notify(context.getString(R.string.card_write_start_failed))
-                                }
-                            },
+                            // 失败原因由 writeDumpToEmulator 自行上报具体文案
+                            // （未连接 / 设备忙 / 元数据非法），这里不要再补一条笼统提示
+                            onWrite = { mainViewModel.writeDumpToEmulator(dump) },
                             onLoad = { mainViewModel.loadDumpToReader(dump) },
                             onView = { onView(dump) },
                             onExport = { onExport(dump) },
@@ -194,12 +198,6 @@ fun CardsScreen(
                     }
                 }
             }
-        }
-
-        SnackbarHost(
-            hostState = snackbarHostState,
-            modifier = Modifier.align(Alignment.BottomCenter).padding(bottom = 8.dp),
-        )
     }
 
     viewingDump?.let { target ->
@@ -340,5 +338,39 @@ private fun DumpCardButton(
         FilledTonalButton(onClick = onClick, enabled = enabled, modifier = modifier) { content() }
     } else {
         TextButton(onClick = onClick, enabled = enabled, modifier = modifier) { content() }
+    }
+}
+
+/**
+ * 卡片列表项预览。
+ *
+ * `DumpCardItem` 只吃普通参数（[DumpCard] + 副标题 + 两个布尔 + 五个回调），
+ * 不碰 ViewModel，所以能直接造一个假卡片渲染出来。想看「写入中」和
+ * 「流程忙碌（按钮全灰）」两种状态，改一下下面两个布尔参数即可。
+ */
+@Preview(showBackground = true)
+@Composable
+private fun DumpCardItemPreview() {
+    ChameleonTheme {
+        DumpCardItem(
+            dump = DumpCard(
+                fileName = "1E6FE3A6_08_0400_1.eml",
+                uidHex = "1E6FE3A6",
+                sakHex = "08",
+                atqaHex = "0400",
+                prng = PrngType.WEAK,
+                // 固定时间戳，保证预览每次渲染结果一致（便于对比两次改动）
+                savedAtMillis = 1_767_225_600_000L,
+                sizeBytes = 1024L * 2,
+            ),
+            subtitle = "2026-09-15 12:34 · SAK 08 · ATQA 0400 · 64 块",
+            busy = false,
+            writing = false,
+            onWrite = {},
+            onLoad = {},
+            onView = {},
+            onExport = {},
+            onDelete = {},
+        )
     }
 }
